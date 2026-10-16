@@ -430,6 +430,7 @@ fn every_command_survives_junk_params() {
                 | "file.exportSvg"
                 | "file.placeImage"
                 | "image.place"
+                | "video.place"
                 | "file.revert"
         ) {
             continue;
@@ -621,3 +622,131 @@ fn find_replace_changing_only_the_case_replaces_every_occurrence() {
     assert_eq!(s.doc().unwrap().node(t).unwrap().kind.text().unwrap().characters, "FigCraft and FigCraft, FigCraft");
     assert_eq!(s.doc().unwrap().node(f).unwrap().name, "FigCraft / FigCraft");
 }
+
+#[test]
+fn video_place_creates_node_with_video_paint_and_supports_undo_redo() {
+    let mut s = sess();
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let video_path = std::path::Path::new(manifest_dir).join("../../audits/spike/assets/test_720p.mp4");
+    if !video_path.exists() {
+        return;
+    }
+    let r = s.execute("video.place", &json!({
+        "path": video_path.to_str().unwrap(),
+        "x": 50,
+        "y": 100,
+    })).unwrap();
+    let vid = id(&r);
+    assert_eq!(s.selection(), vec![vid]);
+    let doc = s.doc().unwrap();
+    let node = doc.node(vid).unwrap();
+    assert_eq!(node.width, 1000.0);
+    assert_eq!(node.height, (1000.0 * 720.0 / 1280.0));
+    assert_eq!(node.fills.len(), 1);
+    assert_eq!(node.fills[0].label(), "Video");
+    assert!(!doc.videos.is_empty());
+    assert!(!doc.images.is_empty());
+
+    // Test undo
+    assert!(s.undo().unwrap());
+    assert!(!s.doc().unwrap().contains(vid));
+
+    // Test redo
+    assert!(s.redo().unwrap());
+    assert!(s.doc().unwrap().contains(vid));
+}
+
+#[test]
+fn video_playback_commands_play_pause_seek_and_stream() {
+    let mut s = sess();
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let video_path = std::path::Path::new(manifest_dir).join("../../audits/spike/assets/test_720p.mp4");
+    if !video_path.exists() {
+        return;
+    }
+    let r = s.execute("video.place", &json!({
+        "path": video_path.to_str().unwrap(),
+        "x": 0,
+        "y": 0,
+    })).unwrap();
+    let vid = id(&r);
+
+    // Initial state: not playing
+    let st = s.execute("video.state", &json!({"id": vid})).unwrap();
+    assert_eq!(st["playing"], false);
+    assert_eq!(st["pts"], 0.0);
+    assert!(st["duration"].as_f64().unwrap() > 0.0);
+
+    // Play video
+    let play_res = s.execute("video.play", &json!({"id": vid})).unwrap();
+    assert_eq!(play_res["playing"], true);
+
+    // Wait a brief moment for the background worker to decode frames into the ring buffer
+    std::thread::sleep(std::time::Duration::from_millis(60));
+
+    // Verify state while playing
+    let st_playing = s.execute("video.state", &json!({"id": vid})).unwrap();
+    assert_eq!(st_playing["playing"], true);
+    assert!(st_playing["pts"].as_f64().unwrap() >= 0.0);
+    assert_eq!(st_playing["hasFrame"], true);
+
+    // Seek to 3.5 seconds
+    let seek_res = s.execute("video.seek", &json!({"id": vid, "time": 3.5})).unwrap();
+    let seek_pts = seek_res["pts"].as_f64().unwrap();
+    assert!((seek_pts - 3.5).abs() < 0.1, "seek_pts should be around 3.5, got {seek_pts}");
+
+    // Pause video
+    let pause_res = s.execute("video.pause", &json!({"id": vid})).unwrap();
+    assert_eq!(pause_res["playing"], false);
+    let pts_paused = pause_res["pts"].as_f64().unwrap();
+    assert!(pts_paused >= 3.4 && pts_paused <= 3.6);
+
+    // Toggle video (should resume playback)
+    let toggle_res = s.execute("video.toggle", &json!({"id": vid})).unwrap();
+    assert_eq!(toggle_res["playing"], true);
+
+    // Toggle again (should pause)
+    let toggle_pause = s.execute("video.toggle", &json!({"id": vid})).unwrap();
+    assert_eq!(toggle_pause["playing"], false);
+}
+
+#[test]
+fn video_playback_render_canvas_sync() {
+    let mut s = sess();
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let video_path = std::path::Path::new(manifest_dir).join("../../audits/spike/assets/test_720p.mp4");
+    if !video_path.exists() {
+        return;
+    }
+    let r = s.execute("video.place", &json!({
+        "path": video_path.to_str().unwrap(),
+        "x": 0,
+        "y": 0,
+    })).unwrap();
+    let vid = id(&r);
+
+    // Initial render without active playback: uses poster frame
+    let initial_rendered = figcraft_render::render_node(s.doc().unwrap(), vid, 1.0).expect("poster render");
+    assert_eq!(initial_rendered.width(), 1000);
+    assert_eq!(initial_rendered.height(), 563);
+
+    // Start playback
+    s.execute("video.play", &json!({"id": vid})).unwrap();
+
+    // Sleep briefly so background thread decodes frame
+    std::thread::sleep(std::time::Duration::from_millis(60));
+
+    // Sync render frames
+    let is_playing = s.video_playback.sync_render_frames();
+    assert!(is_playing, "video should be actively playing");
+    assert!(s.video_playback.tick() > 0, "tick should advance");
+
+    // Render node again while video is playing: uses dynamic decoded frame
+    let playing_rendered = figcraft_render::render_node(s.doc().unwrap(), vid, 1.0).expect("playback render");
+    assert_eq!(playing_rendered.width(), 1000);
+    assert_eq!(playing_rendered.height(), 563);
+
+    // Pause
+    s.execute("video.pause", &json!({"id": vid})).unwrap();
+}
+

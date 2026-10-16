@@ -21,14 +21,16 @@ pub mod fig;
 pub mod library;
 pub mod rest;
 pub mod thumbnail;
+pub mod video_stream;
 
 pub use library::{is_valid_library_id, read_library, read_library_within};
+pub use video_stream::{VideoFrame, VideoStreamDecoder};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, Write};
 use std::sync::Arc;
 
-use figcraft_doc::{Document, ImageData};
+use figcraft_doc::{Document, ImageData, VideoData};
 use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
@@ -195,6 +197,205 @@ pub fn image_hash(bytes: &[u8]) -> String {
     d.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Content hash used as a video's key.
+pub fn video_hash(bytes: &[u8]) -> String {
+    let d = sha2::Sha256::digest(bytes);
+    d.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Convert YUV420 planar buffer to RGBA8 buffer.
+pub fn yuv420_to_rgba(
+    y: &[u8],
+    u: &[u8],
+    v: &[u8],
+    width: usize,
+    height: usize,
+    out_rgba: &mut [u8],
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let expected_len = width.saturating_mul(height).saturating_mul(4);
+    if out_rgba.len() < expected_len {
+        return;
+    }
+
+    let y_stride = width;
+    let u_stride = width / 2;
+    let v_stride = width / 2;
+
+    for row in 0..height {
+        let y_row_start = row * y_stride;
+        let uv_row_start = (row / 2) * u_stride;
+        let out_row_start = row * width * 4;
+
+        let Some(y_row) = y.get(y_row_start..y_row_start + width) else { continue };
+        let Some(u_row) = u.get(uv_row_start..uv_row_start + u_stride) else { continue };
+        let Some(v_row) = v.get(uv_row_start..uv_row_start + v_stride) else { continue };
+        let Some(out_row) = out_rgba.get_mut(out_row_start..out_row_start + width * 4) else { continue };
+
+        let pairs = width / 2;
+        for col_pair in 0..pairs {
+            let u_val = u_row[col_pair] as i32 - 128;
+            let v_val = v_row[col_pair] as i32 - 128;
+
+            let r_off = (359 * v_val + 128) >> 8;
+            let g_off = (88 * u_val + 183 * v_val + 128) >> 8;
+            let b_off = (454 * u_val + 128) >> 8;
+
+            let col0 = col_pair * 2;
+            let y0 = y_row[col0] as i32;
+            let out0 = col0 * 4;
+            out_row[out0] = (y0 + r_off).clamp(0, 255) as u8;
+            out_row[out0 + 1] = (y0 - g_off).clamp(0, 255) as u8;
+            out_row[out0 + 2] = (y0 + b_off).clamp(0, 255) as u8;
+            out_row[out0 + 3] = 255;
+
+            let col1 = col0 + 1;
+            let y1 = y_row[col1] as i32;
+            let out1 = col1 * 4;
+            out_row[out1] = (y1 + r_off).clamp(0, 255) as u8;
+            out_row[out1 + 1] = (y1 - g_off).clamp(0, 255) as u8;
+            out_row[out1 + 2] = (y1 + b_off).clamp(0, 255) as u8;
+            out_row[out1 + 3] = 255;
+        }
+
+        if width % 2 != 0 {
+            let col = width - 1;
+            let u_val = u_row.get(col / 2).copied().unwrap_or(128) as i32 - 128;
+            let v_val = v_row.get(col / 2).copied().unwrap_or(128) as i32 - 128;
+            let y0 = y_row[col] as i32;
+            let out0 = col * 4;
+            out_row[out0] = (y0 + ((359 * v_val + 128) >> 8)).clamp(0, 255) as u8;
+            out_row[out0 + 1] = (y0 - ((88 * u_val + 183 * v_val + 128) >> 8)).clamp(0, 255) as u8;
+            out_row[out0 + 2] = (y0 + ((454 * u_val + 128) >> 8)).clamp(0, 255) as u8;
+            out_row[out0 + 3] = 255;
+        }
+    }
+}
+
+/// Reads video dimensions and duration from container headers without decoding frames.
+pub(crate) fn read_video_metadata(bytes: &[u8]) -> Result<(u32, u32, f64), FormatError> {
+    let size = bytes.len() as u64;
+    let cursor = std::io::Cursor::new(bytes);
+    let mp4 = mp4::Mp4Reader::read_header(cursor, size)
+        .map_err(|e| FormatError::Corrupt(format!("invalid mp4 container: {e}")))?;
+
+    for track in mp4.tracks().values() {
+        if track.track_type().map_err(|e| FormatError::Corrupt(e.to_string()))? == mp4::TrackType::Video {
+            let width = track.width() as u32;
+            let height = track.height() as u32;
+            let duration = mp4.duration().as_secs_f64();
+            return Ok((width, height, duration));
+        }
+    }
+    Err(FormatError::Corrupt("no video track found in MP4".into()))
+}
+
+/// Extracts video dimensions, duration, and first decoded poster frame as PNG.
+pub fn extract_video_metadata_and_poster(bytes: &[u8]) -> Result<(u32, u32, f64, Vec<u8>), FormatError> {
+    let size = bytes.len() as u64;
+    let cursor = std::io::Cursor::new(bytes);
+    let mut mp4 = mp4::Mp4Reader::read_header(cursor, size)
+        .map_err(|e| FormatError::Corrupt(format!("invalid mp4 container: {e}")))?;
+
+    let mut video_track_id = None;
+    let mut track_w = 0u32;
+    let mut track_h = 0u32;
+
+    for track in mp4.tracks().values() {
+        if track.track_type().map_err(|e| FormatError::Corrupt(e.to_string()))? == mp4::TrackType::Video {
+            video_track_id = Some(track.track_id());
+            track_w = track.width() as u32;
+            track_h = track.height() as u32;
+            break;
+        }
+    }
+
+    let track_id = video_track_id.ok_or_else(|| FormatError::Corrupt("no video track found in MP4".into()))?;
+    let sample_count = mp4.sample_count(track_id).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    if sample_count == 0 {
+        return Err(FormatError::Corrupt("video contains no samples".into()));
+    }
+    let duration = mp4.duration().as_secs_f64();
+
+    let (sps, pps) = {
+        let track = mp4.tracks().get(&track_id).ok_or_else(|| FormatError::Corrupt("missing video track".into()))?;
+        let stsd = track
+            .trak
+            .mdia
+            .minf
+            .stbl
+            .stsd
+            .avc1
+            .as_ref()
+            .ok_or_else(|| FormatError::Corrupt("unsupported video codec: only H.264/AVC is currently supported".into()))?;
+
+        if stsd.avcc.sequence_parameter_sets.is_empty() || stsd.avcc.picture_parameter_sets.is_empty() {
+            return Err(FormatError::Corrupt("missing SPS or PPS in AVC configuration".into()));
+        }
+
+        let s = stsd.avcc.sequence_parameter_sets.first().map(|s| s.bytes.clone()).ok_or_else(|| FormatError::Corrupt("missing SPS".into()))?;
+        let p = stsd.avcc.picture_parameter_sets.first().map(|p| p.bytes.clone()).ok_or_else(|| FormatError::Corrupt("missing PPS".into()))?;
+        (s, p)
+    };
+
+    let sample = mp4.read_sample(track_id, 1)
+        .map_err(|e| FormatError::Corrupt(e.to_string()))?
+        .ok_or_else(|| FormatError::Corrupt("could not read first video sample".into()))?;
+
+    let mut annex_b = Vec::with_capacity(sample.bytes.len() + 64);
+    annex_b.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+    annex_b.extend_from_slice(&sps);
+    annex_b.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+    annex_b.extend_from_slice(&pps);
+
+    let mut offset = 0;
+    while offset + 4 <= sample.bytes.len() {
+        let b = &sample.bytes;
+        let len = u32::from_be_bytes([
+            b.get(offset).copied().unwrap_or(0),
+            b.get(offset + 1).copied().unwrap_or(0),
+            b.get(offset + 2).copied().unwrap_or(0),
+            b.get(offset + 3).copied().unwrap_or(0),
+        ]) as usize;
+        offset += 4;
+        if offset + len <= sample.bytes.len() {
+            annex_b.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+            annex_b.extend_from_slice(&b[offset..offset + len]);
+            offset += len;
+        } else {
+            break;
+        }
+    }
+
+    let mut decoder = rusty_h264::Decoder::new();
+    let frames = decoder
+        .decode_stream(&annex_b)
+        .map_err(|e| FormatError::Corrupt(format!("failed to decode video poster frame: {e:?}")))?;
+
+    let f0 = frames.first().ok_or_else(|| FormatError::Corrupt("decoder produced no poster frame".into()))?;
+    let fw = f0.width;
+    let fh = f0.height;
+    if fw == 0 || fh == 0 {
+        return Err(FormatError::Corrupt("invalid video frame dimensions".into()));
+    }
+
+    let mut rgba = vec![0u8; fw * fh * 4];
+    yuv420_to_rgba(&f0.y, &f0.u, &f0.v, fw, fh, &mut rgba);
+
+    let img = image::RgbaImage::from_raw(fw as u32, fh as u32, rgba)
+        .ok_or_else(|| FormatError::Corrupt("failed to construct RGBA poster image".into()))?;
+    let mut png_bytes = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+        .map_err(|e| FormatError::Corrupt(format!("failed to encode poster PNG: {e}")))?;
+
+    let w = if track_w > 0 { track_w } else { fw as u32 };
+    let h = if track_h > 0 { track_h } else { fh as u32 };
+
+    Ok((w, h, duration, png_bytes))
+}
+
 /// Register encoded image bytes with the document; returns the hash and pixel size.
 pub fn add_image(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, u32, u32), FormatError> {
     let (w, h) = image::ImageReader::new(std::io::Cursor::new(&bytes))
@@ -207,6 +408,29 @@ pub fn add_image(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, u32, u32
     Ok((hash, w, h))
 }
 
+/// Register encoded video bytes with the document; extracts a poster frame, inserts it into
+/// `doc.images`, inserts the video into `doc.videos`, and returns `(video_hash, poster_hash, width, height, duration)`.
+pub fn add_video(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, String, u32, u32, f64), FormatError> {
+    let (w, h, duration, poster_png) = extract_video_metadata_and_poster(&bytes)?;
+    let v_hash = video_hash(&bytes);
+    let p_hash = image_hash(&poster_png);
+
+    doc.images.insert(p_hash.clone(), ImageData {
+        bytes: Arc::new(poster_png),
+        width: w,
+        height: h,
+    });
+
+    doc.videos.insert(v_hash.clone(), VideoData {
+        bytes: Arc::new(bytes),
+        width: w,
+        height: h,
+        duration_seconds: duration,
+    });
+
+    Ok((v_hash, p_hash, w, h, duration))
+}
+
 /// Image bytes with their pixel size (0×0 when they can't be decoded).
 pub(crate) fn image_data(data: Vec<u8>) -> ImageData {
     let (w, h) =
@@ -214,7 +438,13 @@ pub(crate) fn image_data(data: Vec<u8>) -> ImageData {
     ImageData { bytes: Arc::new(data), width: w, height: h }
 }
 
-/// `document.json`: the format header, the image index and the document's own fields, written
+/// Video bytes with their pixel size and duration (0×0, 0.0s when they can't be decoded).
+pub(crate) fn video_data(data: Vec<u8>) -> VideoData {
+    let (w, h, duration) = read_video_metadata(&data).unwrap_or((0, 0, 0.0));
+    VideoData { bytes: Arc::new(data), width: w, height: h, duration_seconds: duration }
+}
+
+/// `document.json`: the format header, the image index, the video index, and the document's own fields, written
 /// straight from the document (no intermediate JSON tree).
 #[derive(Serialize)]
 struct DocumentJson<'a> {
@@ -222,13 +452,15 @@ struct DocumentJson<'a> {
     version: u32,
     #[serde(rename = "imageIndex", serialize_with = "image_index")]
     images: &'a BTreeMap<String, ImageData>,
+    #[serde(rename = "videoIndex", serialize_with = "video_index", skip_serializing_if = "BTreeMap::is_empty")]
+    videos: &'a BTreeMap<String, VideoData>,
     #[serde(flatten)]
     doc: &'a Document,
 }
 
 impl<'a> DocumentJson<'a> {
     fn new(doc: &'a Document) -> Self {
-        Self { format: FORMAT, version: VERSION, images: &doc.images, doc }
+        Self { format: FORMAT, version: VERSION, images: &doc.images, videos: &doc.videos, doc }
     }
 }
 
@@ -243,6 +475,24 @@ fn image_index<S: Serializer>(images: &&BTreeMap<String, ImageData>, s: S) -> Re
     s.collect_seq(images.iter().map(|(hash, i)| Entry { hash, width: i.width, height: i.height }))
 }
 
+/// The `videoIndex`: `[{hash, width, height, durationSeconds}]` for every video the document holds.
+fn video_index<S: Serializer>(videos: &&BTreeMap<String, VideoData>, s: S) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Entry<'a> {
+        hash: &'a str,
+        width: u32,
+        height: u32,
+        #[serde(rename = "durationSeconds")]
+        duration_seconds: f64,
+    }
+    s.collect_seq(videos.iter().map(|(hash, v)| Entry {
+        hash,
+        width: v.width,
+        height: v.height,
+        duration_seconds: v.duration_seconds,
+    }))
+}
+
 /// Serialize the document (without images) to the JSON value stored in `document.json`.
 pub fn to_json(doc: &Document) -> Result<Value, FormatError> {
     serde_json::to_value(DocumentJson::new(doc)).map_err(io_err)
@@ -255,18 +505,21 @@ pub fn write_json(doc: &Document, w: impl Write) -> Result<(), FormatError> {
 
 /// Parse `document.json` content.
 pub fn from_json(text: &str) -> Result<(Document, Vec<String>), FormatError> {
-    parse_json(text).map(|(doc, issues, _)| (doc, issues))
+    parse_json(text).map(|(doc, issues, _, _)| (doc, issues))
 }
 
 /// The image hashes a `document.json` lists in its `imageIndex` (`None` without one).
 type ImageIndex = Option<BTreeSet<String>>;
+/// The video hashes a `document.json` lists in its `videoIndex` (`None` without one).
+type VideoIndex = Option<BTreeSet<String>>;
 
-/// The header of a `document.json` (its format version and image index), read in a pass that
+/// The header of a `document.json` (its format version, image index and video index), read in a pass that
 /// skips over everything else without building it.
 #[derive(Default)]
 struct Header {
     version: Option<u64>,
     images: ImageIndex,
+    videos: VideoIndex,
 }
 
 impl<'de> Deserialize<'de> for Header {
@@ -288,6 +541,12 @@ impl<'de> Deserialize<'de> for Header {
                                 .as_array()
                                 .map(|a| a.iter().filter_map(|i| i.get("hash").and_then(Value::as_str).map(str::to_string)).collect());
                         }
+                        "videoIndex" => {
+                            h.videos = map
+                                .next_value::<Value>()?
+                                .as_array()
+                                .map(|a| a.iter().filter_map(|i| i.get("hash").and_then(Value::as_str).map(str::to_string)).collect());
+                        }
                         _ => {
                             map.next_value::<IgnoredAny>()?;
                         }
@@ -300,10 +559,10 @@ impl<'de> Deserialize<'de> for Header {
     }
 }
 
-/// Parse `document.json` content; also returns its [`ImageIndex`]. The header is checked first
+/// Parse `document.json` content; also returns its [`ImageIndex`] and [`VideoIndex`]. The header is checked first
 /// (a newer file is refused before its document is read), then the document is deserialized
 /// straight from the text.
-fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatError> {
+fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex, VideoIndex), FormatError> {
     let corrupt = |e: serde_json::Error| FormatError::Corrupt(e.to_string());
     let header: Header = serde_json::from_str(text).map_err(corrupt)?;
     if let Some(ver) = header.version
@@ -316,7 +575,7 @@ fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatE
     if !issues.is_empty() {
         doc.repair();
     }
-    Ok((doc, issues, header.images))
+    Ok((doc, issues, header.images, header.videos))
 }
 
 pub(crate) fn io_err(e: impl std::fmt::Display) -> FormatError {
@@ -377,6 +636,13 @@ pub fn save_bytes_with_history(
         for (hash, img) in std::iter::once(&doc.images).chain(versions.iter().map(Version::images)).chain(branch_images).flatten() {
             if written.insert(hash) {
                 put(&mut z, &format!("images/{hash}"), stored, &img.bytes)?;
+            }
+        }
+        // Every video once.
+        let mut written_videos = BTreeSet::new();
+        for (hash, vid) in &doc.videos {
+            if written_videos.insert(hash) {
+                put(&mut z, &format!("videos/{hash}"), stored, &vid.bytes)?;
             }
         }
         if let Some(t) = thumbnail_png {
@@ -477,9 +743,11 @@ pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, F
     }
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let text = String::from_utf8(read_member(&mut z, "document.json", MAX_MEMBER)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
-    let (mut doc, mut issues, own_images) = parse_json(&text)?;
+    let (mut doc, mut issues, own_images, own_videos) = parse_json(&text)?;
     let (images, unread) = read_images(&mut z, own_images.as_ref(), budget);
     report_lost_images(&mut issues, &unread, own_images.as_ref(), &images);
+    let (videos, unread_vids) = read_videos(&mut z, own_videos.as_ref(), VIDEO_BUDGET);
+    report_lost_videos(&mut issues, &unread_vids, own_videos.as_ref(), &videos);
     match library::read(&mut z, &images, u64::MAX) {
         Ok(lib) => doc.published = lib.map(Arc::new),
         Err(e) => issues.push(format!("the published library was skipped: {e}")),
@@ -497,6 +765,7 @@ pub(crate) fn load_within(bytes: &[u8], budget: ImageBudget) -> Result<Loaded, F
         .filter(|h| own_images.as_ref().is_some_and(|o| !o.contains(*h)))
         .collect();
     doc.images = images.into_iter().filter(|(h, _)| !history_only.contains(h)).collect();
+    doc.videos = videos;
     Ok(Loaded { doc, issues, versions, branches })
 }
 
@@ -569,6 +838,92 @@ fn report_lost_images(
     if more > 0 {
         issues.push(format!("{more} more images couldn't be loaded"));
     }
+}
+
+/// Most lost videos reported one by one (the rest as a count).
+const MAX_VIDEO_ISSUES: usize = 20;
+
+/// Report the videos a file lost on loading: members that couldn't be read (damaged, too large, hash mismatch)
+/// and videos its document lists but the archive doesn't hold.
+fn report_lost_videos(
+    issues: &mut Vec<String>,
+    unread: &[(String, FormatError)],
+    listed: Option<&BTreeSet<String>>,
+    videos: &BTreeMap<String, VideoData>,
+) {
+    let mut lost: Vec<String> = unread
+        .iter()
+        .map(|(hash, e)| {
+            let why = match e {
+                FormatError::Corrupt(m) | FormatError::Io(m) => m.clone(),
+                FormatError::Newer(v) => format!("format version {v}"),
+            };
+            format!("video {hash} couldn't be read ({why}): it is left out, and saving this file again drops it")
+        })
+        .collect();
+    let unread_hashes: BTreeSet<&str> = unread.iter().map(|(h, _)| h.as_str()).collect();
+    for hash in listed.into_iter().flatten() {
+        if !videos.contains_key(hash) && !unread_hashes.contains(hash.as_str()) {
+            lost.push(format!("video {hash} is used by the file but its data is missing: it is left out, and saving this file again drops it"));
+        }
+    }
+    let more = lost.len().saturating_sub(MAX_VIDEO_ISSUES);
+    lost.truncate(MAX_VIDEO_ISSUES);
+    issues.extend(lost);
+    if more > 0 {
+        issues.push(format!("{more} more videos couldn't be loaded"));
+    }
+}
+
+/// How many videos, and how many bytes of them together, one file may give.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VideoBudget {
+    pub videos: usize,
+    pub bytes: u64,
+}
+
+pub(crate) const VIDEO_BUDGET: VideoBudget = VideoBudget {
+    videos: 50,
+    bytes: 512 * 1024 * 1024,
+};
+
+/// The archive's `videos/` members by hash, within `budget`, and the ones that couldn't be read
+/// with why.
+fn read_videos<R: Read + Seek>(
+    z: &mut zip::ZipArchive<R>,
+    own: Option<&BTreeSet<String>>,
+    budget: VideoBudget,
+) -> (BTreeMap<String, VideoData>, Vec<(String, FormatError)>) {
+    let mut hashes: Vec<String> = z.file_names().filter_map(|n| n.strip_prefix("videos/")).map(str::to_string).collect();
+    hashes.sort_by_key(|h| !own.is_some_and(|o| o.contains(h)));
+    let mut videos = BTreeMap::new();
+    let mut unread = Vec::new();
+    let mut left = budget.bytes;
+    for (i, hash) in hashes.into_iter().enumerate() {
+        let name = format!("videos/{hash}");
+        if i >= budget.videos {
+            unread.push((hash, FormatError::Corrupt(format!("the file has more than {} videos", budget.videos))));
+            continue;
+        }
+        if z.by_name(&name).is_ok_and(|f| f.size() > left) {
+            let mb = budget.bytes / (1024 * 1024);
+            unread.push((hash, FormatError::Corrupt(format!("the file's videos together pass {mb} MB"))));
+            continue;
+        }
+        match read_member(z, &name, left.min(MAX_MEMBER)) {
+            Ok(data) => {
+                let actual = video_hash(&data);
+                if actual != hash {
+                    unread.push((hash, FormatError::Corrupt("video content hash mismatch".into())));
+                    continue;
+                }
+                left = left.saturating_sub(data.len() as u64);
+                videos.insert(hash, video_data(data));
+            }
+            Err(e) => unread.push((hash, e)),
+        }
+    }
+    (videos, unread)
 }
 
 /// The version history kept under `dir` in an archive (none when it has no index), reading at
@@ -761,6 +1116,8 @@ mod staging_tests;
 mod thumbnail_tests;
 #[cfg(test)]
 mod version_tests;
+#[cfg(test)]
+mod video_tests;
 
 #[cfg(test)]
 mod tests {

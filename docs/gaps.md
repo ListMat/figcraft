@@ -25,7 +25,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 9 | Figma Draw: pen pressure on macOS/Linux tablets (multi-edit, brushes, pressure, text on a path and pattern fills landed) | Feature | 1–3 | [target-app-parity](target-app-parity.md) |
 | 10 | Team libraries: no team-wide lists or accounts; analytics are counts | Feature | 4–8 | [components-parity](components-parity.md) |
 | 11 | Spell check | Feature | 4–8 | [target-app-parity](target-app-parity.md) |
-| 12 | Video fills; HEIC images | File format | 5–10 | [file-format-parity](file-format-parity.md) |
+| 12 | Video fills (Phase 1 & 2 landed: native MP4/H.264 canvas playback); HEIC images | File format | 2–4 | [file-format-parity](file-format-parity.md) |
 | 13 | Vector tail: none left (boolean hit testing on the result landed 2026-10-11) | Feature | — | [target-app-parity](target-app-parity.md) |
 | 14 | Variables: extended collections checked on real libraries (the tail landed 2026-10-12) | Feature | 0–1 | [components-parity](components-parity.md) |
 | 15 | Prototyping: media triggers and actions; controllers on macOS, Linux and FreeBSD (controller buttons on key/gamepad triggers, widgets in prototypes landed) | Feature | 2–5 | [prototyping-parity](prototyping-parity.md) |
@@ -256,12 +256,17 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   `ATTRIBUTION.md`).
 
 ### 12. Video fills; HEIC images
+- **Landed (2026-10-16):** native pure-Rust MP4/H.264 video playback on canvas (Phase 1 & Phase 2
+  landed): `video.place` import with dedicated archive persistence (`videos/<hash>`), pure-Rust
+  sequential decoding (`rusty_h264`, `mp4`), background worker with 4-frame ring buffer and `Condvar`
+  backpressure, monotonic playback clock, parity commands (`video.play`, `video.pause`, `video.toggle`,
+  `video.seek`, `video.state`), canvas dynamic texture sampling (`crates/render::images::set_video_frame`),
+  and 60 FPS egui canvas repaint pacing (`JobKey.video_tick`).
 - **Landed (2026-10-11):** animated GIF fills (the file kept as is, the first frame on the canvas
   and in exports, played in the presenter and the preview) and TIFF images.
-- **Missing:** Figma takes JPG, PNG, HEIC, WebP, GIF and TIFF images and MP4, MOV and WebM video
-  (help center, checked 2026-10-10). FigCraft decodes PNG, JPEG, WebP, GIF, TIFF and BMP; HEIC and
-  video need decoders that are C libraries (libheif, FFmpeg) or each platform's media framework.
-- **Estimate:** 5–10 h (video playback in the presenter is most of it; it can reuse the GIF clock).
+- **Missing:** video audio track playback; UI timeline scrubber widget in the design panel; HEIC
+  images need a pure-Rust reader.
+- **Estimate:** 2–4 h for video audio and scrubber UI; HEIC images.
 
 ### 13. Vector tail: none left
 - **Landed (2026-10-12):** several Bezier handles selected with Shift-click and dragged together,

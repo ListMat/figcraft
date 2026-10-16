@@ -96,6 +96,7 @@ icons! {
     Styles,
     Menu,
     Play,
+    Pause,
     Home,
     Bell,
     Panels,
@@ -756,6 +757,10 @@ fn draw(p: &P, icon: Icon) {
             }
         }
         Play => p.fill(&[(4.5, 2.5), (13.5, 8.0), (4.5, 13.5)]),
+        Pause => {
+            p.fill(&[(4.0, 3.0), (6.5, 3.0), (6.5, 13.0), (4.0, 13.0)]);
+            p.fill(&[(9.5, 3.0), (12.0, 3.0), (12.0, 13.0), (9.5, 13.0)]);
+        }
         Home => {
             // Unhinted so the roof's peak stays centred; the floor stops at the door.
             p.path(&[(6.5, 13.5), (3.5, 13.5), (3.5, 7.0), (8.0, 2.8), (12.5, 7.0), (12.5, 13.5), (9.5, 13.5)], false);

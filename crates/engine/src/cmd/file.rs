@@ -505,6 +505,15 @@ fn load_with(
             doc.get_mut(id)?.fills = vec![figcraft_color::Paint::image(hash, figcraft_color::ImageScaleMode::Fill)];
             Ok((doc.into(), false))
         }
+        "mp4" | "m4v" => {
+            let mut doc = Document::new(file_stem(name_hint));
+            let page = doc.first_page().ok_or(EngineError::NoDocument)?;
+            let (v_hash, p_hash, w, h, _duration_secs) =
+                figcraft_format::add_video(&mut doc, bytes.to_vec()).map_err(|e| EngineError::Other(e.to_string()))?;
+            let id = doc.create(page, NodeKind::Rectangle, &file_stem(name_hint), 0.0, 0.0, f64::from(w), f64::from(h))?;
+            doc.get_mut(id)?.fills = vec![figcraft_color::Paint::video(p_hash, v_hash, figcraft_color::ImageScaleMode::Fill)];
+            Ok((doc.into(), false))
+        }
         _ => {
             if let Some(r) = figcraft_format::fig::try_import(bytes, &file_stem(name_hint)) {
                 let (mut doc, warnings) = r.map_err(|e| EngineError::Other(e.to_string()))?;
@@ -1241,6 +1250,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                 out["warnings"] = json!(other.issues);
             }
             Ok(out)
+        }
+        "mp4" | "m4v" => {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            super::create::place_video(s, &json!({"data": b64, "x": x.unwrap_or(center.0), "y": y.unwrap_or(center.1), "name": file_stem(&name)}))
         }
         _ => {
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);

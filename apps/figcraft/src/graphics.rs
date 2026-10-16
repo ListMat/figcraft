@@ -12,8 +12,8 @@
 use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup};
 use eframe::wgpu::Backends;
 
-/// Direct3D 12, then OpenGL: wgpu ranks a hardware GPU on either ahead of Direct3D's software one.
-const WINDOWS: Backends = Backends::DX12.union(Backends::GL);
+/// OpenGL first on Windows to avoid dual-GPU DX12 driver deadlocks, then DX12 fallback.
+const WINDOWS: Backends = Backends::GL.union(Backends::DX12);
 
 /// The backends wgpu chooses from: the ones `WGPU_BACKEND` asks for (`requested`), else [`WINDOWS`]
 /// on Windows, else eframe's `defaults`.

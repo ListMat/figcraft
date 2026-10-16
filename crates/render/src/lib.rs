@@ -24,7 +24,7 @@ pub mod shadow;
 pub use draw::{node_outline, paint_bounds, stroke_fill, subtree_outline, ts_path};
 pub use export_depth::{ExportDepthError, MAX_EXPORT_DEPTH, check_export_depth};
 pub use retained::{Retained, Work};
-pub use tiny_skia::{FillRule, Pixmap};
+pub use tiny_skia::{FillRule, IntSize, Pixmap};
 
 use figcraft_color::{Color, ColorProfile};
 use figcraft_doc::{Document, ExportFormat, NodeId, NodeKind};

@@ -306,12 +306,17 @@ pub fn animation_clock(doc: &Document, root: NodeId, t: f64) -> Option<(u64, f64
     let mut clock: Option<(u64, f64)> = None;
     for n in doc.subtree(root).into_iter().filter_map(|id| doc.node(id)).filter(|n| n.visible) {
         for p in n.fills.iter().chain(&n.strokes).filter(|p| p.visible) {
-            if let PaintKind::Image(img) = &p.kind
-                && let Some(a) = animation(&img.image, doc.images.get(&img.image), &img.filters, doc.color_profile)
-            {
-                let (i, next) = a.at(t);
-                let (key, soonest) = clock.unwrap_or((0, f64::INFINITY));
-                clock = Some((key.wrapping_mul(31).wrapping_add(i as u64 + 1), soonest.min(next)));
+            if let PaintKind::Image(img) = &p.kind {
+                if let Some(a) = animation(&img.image, doc.images.get(&img.image), &img.filters, doc.color_profile) {
+                    let (i, next) = a.at(t);
+                    let (key, soonest) = clock.unwrap_or((0, f64::INFINITY));
+                    clock = Some((key.wrapping_mul(31).wrapping_add(i as u64 + 1), soonest.min(next)));
+                } else if let Some(v) = &img.video {
+                    if video_frame(&v.hash).is_some() {
+                        let (key, soonest) = clock.unwrap_or((0, f64::INFINITY));
+                        clock = Some((key.wrapping_mul(31).wrapping_add(1), soonest.min(0.016)));
+                    }
+                }
             }
         }
     }
@@ -388,4 +393,36 @@ pub fn padded(hash: &str, filters: &ImageFilters, profile: ColorProfile, pm: &Pi
     let out = Arc::new(pad(pm)?);
     padded_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, out.clone(), MAX_CACHED_BYTES);
     Some(out)
+}
+
+static VIDEO_FRAMES: OnceLock<Mutex<HashMap<String, Arc<Pixmap>>>> = OnceLock::new();
+
+fn video_frames() -> &'static Mutex<HashMap<String, Arc<Pixmap>>> {
+    VIDEO_FRAMES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Sets the current active decoded video frame for the given video hash.
+pub fn set_video_frame(hash: &str, pixmap: Arc<Pixmap>) {
+    if let Ok(mut map) = video_frames().lock() {
+        map.insert(hash.to_string(), pixmap);
+    }
+}
+
+/// Clears the active video frame for the given video hash.
+pub fn clear_video_frame(hash: &str) {
+    if let Ok(mut map) = video_frames().lock() {
+        map.remove(hash);
+    }
+}
+
+/// Clears all active video frames.
+pub fn clear_all_video_frames() {
+    if let Ok(mut map) = video_frames().lock() {
+        map.clear();
+    }
+}
+
+/// Retrieves the current active decoded video frame for the given video hash, if any.
+pub fn video_frame(hash: &str) -> Option<Arc<Pixmap>> {
+    video_frames().lock().ok()?.get(hash).cloned()
 }

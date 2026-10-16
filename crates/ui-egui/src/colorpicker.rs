@@ -684,6 +684,21 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                         write(app, &target, &paint, false);
                     }
                 });
+                if let Some(v) = &img.video {
+                    let v_hash = v.hash.clone();
+                    let is_playing = app.session.video_playback.is_playing(&v_hash);
+                    let pts = app.session.video_playback.current_pts(&v_hash);
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        let icon = if is_playing { Icon::Pause } else { Icon::Play };
+                        let tip = if is_playing { tr("Pause video") } else { tr("Play video") };
+                        if icons::button(ui, icon, 24.0, false, tip).clicked() {
+                            app.session.video_playback.toggle(&v_hash);
+                        }
+                        let time_str = format!("{:.1}s", pts);
+                        ui.label(egui::RichText::new(time_str).font(regular(11.0)).color(t.text_secondary));
+                    });
+                }
                 // The image's own colour profile (decoding converts it into the file's).
                 let source = app.session.doc().ok().and_then(|d| figcraft_render::images::profile_name(&img.image, d.images.get(&img.image)));
                 let source = match source.as_deref() {

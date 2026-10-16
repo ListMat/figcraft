@@ -83,6 +83,13 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             place_image
         ),
+        spec!(
+            "video.place",
+            "Place video",
+            "{data (base64) | path, x?, y?, width?, height?, parent?, mode? (fill|fit|crop|tile)} → {id, video, poster, width, height, duration}",
+            true,
+            place_video
+        ),
         spec!("frame.swapOrientation", "Swap orientation", "{ids?} (portrait ⇄ landscape: width and height trade places)", true, |s, p| {
             let ids = req_targets("frame.swapOrientation", s, p)?;
             let doc = s.doc()?;
@@ -359,4 +366,58 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
     ds.selection = vec![nid];
     let _ = ok;
     Ok(json!({"id": nid, "image": hash, "width": w, "height": h, "imageProfile": profile}))
+}
+
+/// Place a video as a rectangle with a video fill and poster frame (Figma's video layer).
+pub fn place_video(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "video.place";
+    let bytes = if let Some(b64) = string(p, "data") {
+        use base64::Engine as _;
+        let b64 = b64.split_once(',').map(|(_, d)| d.to_string()).unwrap_or(b64);
+        base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| bad(cmd, format!("`data`: {e}")))?
+    } else if let Some(path) = string(p, "path") {
+        read_path(&path)?
+    } else {
+        return Err(bad(cmd, "pass `data` (base64) or `path`"));
+    };
+    let mode = match string(p, "mode").unwrap_or_default().to_ascii_lowercase().as_str() {
+        "fit" => ImageScaleMode::Fit,
+        "crop" => ImageScaleMode::Crop,
+        "tile" => ImageScaleMode::Tile,
+        _ => ImageScaleMode::Fill,
+    };
+    let page = s.page()?;
+    let parent = id(p, "parent").unwrap_or(page);
+    let ds = s.ds_mut()?;
+    let doc = ds.doc_mut();
+    let (video_hash, poster_hash, vw, vh, duration) = figcraft_format::add_video(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+    let (vw, vh) = (f64::from(vw), f64::from(vh));
+    // Fit large videos into 1000 px like Figma does when placing.
+    let k = (1000.0 / vw.max(vh)).min(1.0);
+    let w = num(p, "width").unwrap_or(vw * k);
+    let h = num(p, "height").unwrap_or(if num(p, "width").is_some() { w * vh / vw.max(1.0) } else { vh * k });
+    let nid = doc.alloc_id();
+    let name = string(p, "name").unwrap_or_else(|| "Video".into());
+    let mut node = Node::new(nid, NodeKind::Rectangle, name, w, h);
+    node.transform = figcraft_geom::Affine::translate((num_or(p, "x", 0.0), num_or(p, "y", 0.0)));
+    node.fills = vec![Paint::video(poster_hash.clone(), video_hash.clone(), mode)];
+    doc.insert(node, parent, None)?;
+    let bytes_arc = doc.videos.get(&video_hash).map(|v| v.bytes.clone());
+    ds.selection = vec![nid];
+    let autoplay = boolean(p, "autoplay").unwrap_or(false);
+    if let Some(bytes_arc) = bytes_arc {
+        if let Ok(player) = s.video_playback.get_or_create(&video_hash, bytes_arc, true) {
+            if autoplay {
+                player.play();
+            }
+        }
+    }
+    Ok(json!({
+        "id": nid,
+        "video": video_hash,
+        "poster": poster_hash,
+        "width": w,
+        "height": h,
+        "duration": duration,
+    }))
 }

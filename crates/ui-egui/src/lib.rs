@@ -975,11 +975,11 @@ impl FigApp {
 
     pub fn import_dialog(&mut self, place: bool) {
         let exts: &[&str] = if place {
-            &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]
+            &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "mp4", "m4v"]
         } else {
-            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig"]
+            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "mp4", "m4v", "figcraft", "fig"]
         };
-        let title = if place { i18n::tr("Place image") } else { i18n::tr("Import") };
+        let title = if place { i18n::tr("Place image / video") } else { i18n::tr("Import") };
         self.pick_open(title, exts, move |app, p| {
             let ps = p.to_string_lossy().to_string();
             app.run("file.import", json!({"path": ps}));
@@ -1366,6 +1366,14 @@ impl FigApp {
                 });
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
+            // Synchronize active video playback frames to the renderer before canvas paints
+            if let Ok(ds) = self.session.ds() {
+                self.session.video_playback.ensure_document_videos(&ds.doc);
+            }
+            let video_playing = self.session.video_playback.sync_render_frames();
+            if video_playing {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
             let worker = self.worker.take();
             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
             canvas::show(self, ui, &mut worker);
@@ -1534,7 +1542,7 @@ impl FigApp {
 }
 
 /// The file types File ▸ Open and a drop on the home screen open.
-pub(crate) const OPEN_EXTENSIONS: &[&str] = &["figcraft", "fig", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"];
+pub(crate) const OPEN_EXTENSIONS: &[&str] = &["figcraft", "fig", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "mp4", "m4v"];
 
 /// Whether `path` names a file type that opens as a document (the extension, in any case).
 pub(crate) fn opens(path: &Path) -> bool {

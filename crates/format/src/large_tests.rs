@@ -199,6 +199,6 @@ fn the_header_is_read_on_its_own() {
         assert!(matches!(from_json(junk), Err(FormatError::Corrupt(_))), "{junk}");
     }
     // The image index is read from the header too.
-    let (_, _, index) = parse_json(&d.replacen("\"imageIndex\":[]", "\"imageIndex\":[{\"hash\":\"ab\"},{\"nope\":1}]", 1)).unwrap();
+    let (_, _, index, _) = parse_json(&d.replacen("\"imageIndex\":[]", "\"imageIndex\":[{\"hash\":\"ab\"},{\"nope\":1}]", 1)).unwrap();
     assert_eq!(index, Some(["ab".to_string()].into_iter().collect()));
 }

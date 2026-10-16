@@ -129,6 +129,7 @@ struct JobKey {
     /// Text lays out anew when fonts arrive (system fonts load in the background).
     fonts: u64,
     proof: bool,
+    video_tick: u64,
 }
 
 impl FigApp {
@@ -364,6 +365,7 @@ fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_s
         solo: ds.focused(),
         fonts: figcraft_text::layout_generation(),
         proof,
+        video_tick: app.session.video_playback.tick(),
     };
     if let Some(previous) = &app.canvas.submitted {
         let previous_origin = (previous.origin.0 as f64 / 1000.0, previous.origin.1 as f64 / 1000.0);

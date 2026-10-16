@@ -396,6 +396,40 @@ pub struct ImagePaint {
     pub crop: Option<[f64; 6]>,
     #[serde(default)]
     pub filters: ImageFilters,
+    /// Video reference if this image fill represents a video's poster and stream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<VideoRef>,
+}
+
+/// A reference to an embedded video asset with playback preferences.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VideoRef {
+    /// The content-addressed hash of the video container in `doc.videos`.
+    pub hash: String,
+    /// Whether playback should loop.
+    #[serde(default = "yes")]
+    pub loop_playback: bool,
+    /// Whether playback should start automatically.
+    #[serde(default = "yes")]
+    pub autoplay: bool,
+    /// Whether audio is muted.
+    #[serde(default)]
+    pub muted: bool,
+    /// Audio volume level, 0.0..=1.0 (1.0 = 100%).
+    #[serde(default = "one")]
+    pub volume: f32,
+}
+
+impl VideoRef {
+    pub fn new(hash: impl Into<String>) -> Self {
+        Self {
+            hash: hash.into(),
+            loop_playback: true,
+            autoplay: true,
+            muted: false,
+            volume: 1.0,
+        }
+    }
 }
 
 impl ImagePaint {
@@ -571,6 +605,25 @@ impl Paint {
                 rotation: 0,
                 crop: None,
                 filters: ImageFilters::default(),
+                video: None,
+            }),
+            opacity: 1.0,
+            visible: true,
+            blend: BlendMode::Normal,
+        }
+    }
+
+    /// An image paint representing an embedded video with a poster frame.
+    pub fn video(poster_hash: impl Into<String>, video_hash: impl Into<String>, mode: ImageScaleMode) -> Self {
+        Self {
+            kind: PaintKind::Image(ImagePaint {
+                image: poster_hash.into(),
+                scale_mode: mode,
+                scale: 1.0,
+                rotation: 0,
+                crop: None,
+                filters: ImageFilters::default(),
+                video: Some(VideoRef::new(video_hash)),
             }),
             opacity: 1.0,
             visible: true,
@@ -591,7 +644,7 @@ impl Paint {
         }
     }
 
-    /// A short label for the panel row ("D9D9D9", "Linear", "Image").
+    /// A short label for the panel row ("D9D9D9", "Linear", "Image", "Video").
     pub fn label(&self) -> String {
         match &self.kind {
             PaintKind::Solid { color } => color.to_hex(),
@@ -601,7 +654,13 @@ impl Paint {
                 GradientKind::Angular => "Angular".into(),
                 GradientKind::Diamond => "Diamond".into(),
             },
-            PaintKind::Image(_) => "Image".into(),
+            PaintKind::Image(img) => {
+                if img.video.is_some() {
+                    "Video".into()
+                } else {
+                    "Image".into()
+                }
+            }
             PaintKind::Pattern(_) => "Pattern".into(),
         }
     }

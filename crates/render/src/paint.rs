@@ -137,26 +137,26 @@ pub fn prepare_at(paint: &Paint, w: f64, h: f64, scale: f64, doc: &Document, tim
         }
         PaintKind::Image(img) => {
             let data = doc.images.get(&img.image);
-            let moving = crate::images::frame_at(&img.image, data, &img.filters, doc.color_profile, time);
+            let video_pm = img.video.as_ref().and_then(|v| crate::images::video_frame(&v.hash));
+            let moving = video_pm.clone().or_else(|| crate::images::frame_at(&img.image, data, &img.filters, doc.color_profile, time));
+            let is_dynamic = video_pm.is_some() || moving.is_some();
             let pm = match &moving {
                 Some(f) => f.clone(),
                 None => crate::images::get(&img.image, data, &img.filters, doc.color_profile)?,
             };
             let transform = image_transform(img, f64::from(pm.width()), f64::from(pm.height()), w, h);
             if img.scale_mode == ImageScaleMode::Tile {
-                return Some(Prepared::Pattern { pixmap: pm, mode: SpreadMode::Repeat, quality: FilterQuality::Bicubic, opacity: op, transform });
+                let quality = if is_dynamic { FilterQuality::Bilinear } else { FilterQuality::Bicubic };
+                return Some(Prepared::Pattern { pixmap: pm, mode: SpreadMode::Repeat, quality, opacity: op, transform });
             }
-            // An image covering the whole box fills it to its edges (a transparent border would
-            // fade them where the image is scaled up).
-            if covers_box(img, f64::from(pm.width()), f64::from(pm.height()), w, h) {
-                return Some(Prepared::Pattern { pixmap: pm, mode: SpreadMode::Pad, quality: FilterQuality::Bicubic, opacity: op, transform });
+            // An image covering the whole box fills it to its edges.
+            // For dynamic video frames, render directly with Bilinear filtering to avoid 8MB per-frame allocation.
+            if is_dynamic || covers_box(img, f64::from(pm.width()), f64::from(pm.height()), w, h) {
+                let quality = if is_dynamic { FilterQuality::Bilinear } else { FilterQuality::Bicubic };
+                return Some(Prepared::Pattern { pixmap: pm, mode: SpreadMode::Pad, quality, opacity: op, transform });
             }
             // Fit/Crop: a transparent 1-px border so Pad spreads transparency, not edge pixels.
-            // A GIF's later frames each show once per loop: not worth caching padded.
-            let padded = match moving {
-                Some(_) => Arc::new(crate::images::pad(&pm)?),
-                None => crate::images::padded(&img.image, &img.filters, doc.color_profile, &pm)?,
-            };
+            let padded = crate::images::padded(&img.image, &img.filters, doc.color_profile, &pm)?;
             let transform = Transform::from_translate(-1.0, -1.0).post_concat(transform);
             Some(Prepared::Pattern { pixmap: padded, mode: SpreadMode::Pad, quality: FilterQuality::Bicubic, opacity: op, transform })
         }

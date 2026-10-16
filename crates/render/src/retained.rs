@@ -303,6 +303,24 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
             }
         }
     }
+    // Active video layers on this page need repainting as new frames arrive:
+    for n in doc.subtree(page).into_iter().filter_map(|id| doc.node(id)).filter(|n| n.visible) {
+        for p in n.fills.iter().chain(&n.strokes).filter(|p| p.visible) {
+            if let figcraft_color::PaintKind::Image(img) = &p.kind {
+                if let Some(v) = &img.video {
+                    if crate::images::video_frame(&v.hash).is_some() {
+                        let mut areas = Vec::new();
+                        let _ = changed_areas(doc, page, n.id, &mut areas);
+                        for r in areas {
+                            if let Some(p) = to_px(r, view.scale, px) {
+                                damage.push(Px { x0: p.x0 - reach, y0: p.y0 - reach, x1: p.x1 + reach, y1: p.y1 + reach });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     let mut damage: Vec<Px> = damage.iter().filter_map(|d| d.clamp(w, h)).collect();
     if damage.is_empty() && dx == 0 && dy == 0 {
         return Some((last.pix, 0));

@@ -150,7 +150,7 @@ fn pattern(cx: &mut Ctx, pat: &usvg::Pattern, t: Target) -> Option<Paint> {
     if !(kx.0 <= kx.1 && ky.0 <= ky.1) {
         return None;
     }
-    let mut ip = ImagePaint { image: hash, scale_mode: ImageScaleMode::Fill, scale: 1.0, rotation: 0, crop: None, filters: Default::default() };
+    let mut ip = ImagePaint { image: hash, scale_mode: ImageScaleMode::Fill, scale: 1.0, rotation: 0, crop: None, filters: Default::default(), video: None };
     if kx.0 == kx.1 && ky.0 == ky.1 {
         // Shows once: fill, fit or a crop placing it exactly.
         let m = tile * Affine::translate((kx.0 * rw, ky.0 * rh)) * content;

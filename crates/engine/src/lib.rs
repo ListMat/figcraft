@@ -54,6 +54,7 @@ pub mod textedit;
 pub mod textpreview;
 pub mod tools;
 pub mod vectoredit;
+pub mod video_playback;
 pub mod widgets;
 
 pub use cmd::{CommandSpec, all_commands, find_command};
@@ -738,6 +739,8 @@ pub struct Session {
     pub live: live::Lives,
     /// Commands the UI runs without waiting on a server ([`Session::start_background`]).
     pub background: background::Background,
+    /// Video playback manager for running video streams.
+    pub video_playback: video_playback::VideoPlaybackManager,
 }
 
 impl Default for Session {
@@ -772,6 +775,7 @@ impl Session {
             plugins: plugins::Runtime::default(),
             live: live::Lives::default(),
             background: background::Background::default(),
+            video_playback: video_playback::VideoPlaybackManager::default(),
         }
     }
 

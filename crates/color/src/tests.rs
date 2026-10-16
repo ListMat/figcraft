@@ -96,7 +96,7 @@ fn colour_deserializes_from_many_forms() {
 #[test]
 fn crop_defaults_to_fill_and_roundtrips() {
     let img =
-        ImagePaint { image: String::new(), scale_mode: ImageScaleMode::Crop, scale: 1.0, rotation: 0, crop: None, filters: ImageFilters::default() };
+        ImagePaint { image: String::new(), scale_mode: ImageScaleMode::Crop, scale: 1.0, rotation: 0, crop: None, filters: ImageFilters::default(), video: None };
     // A 200×100 image in a 100×100 box: Fill scales to 100 tall, 200 wide, centred → x from -0.5 to 1.5.
     let c = img.effective_crop(200.0, 100.0, 100.0, 100.0);
     let (x0, y0, x1, y1) = ImagePaint::crop_rect(c);
@@ -105,4 +105,30 @@ fn crop_defaults_to_fill_and_roundtrips() {
     for (a, b) in back.iter().zip(c.iter()) {
         assert!((a - b).abs() < 1e-9);
     }
+}
+
+#[test]
+fn video_paint_serialization_and_defaults() {
+    let p = Paint::video("poster_hash", "video_hash", ImageScaleMode::Fill);
+    assert_eq!(p.label(), "Video");
+    let json = serde_json::to_string(&p).unwrap();
+    assert!(json.contains("\"video\":{\"hash\":\"video_hash\""));
+    let de: Paint = serde_json::from_str(&json).unwrap();
+    assert_eq!(p, de);
+    if let PaintKind::Image(img) = de.kind {
+        let v = img.video.unwrap();
+        assert_eq!(v.hash, "video_hash");
+        assert!(v.loop_playback);
+        assert!(v.autoplay);
+        assert!(!v.muted);
+        assert_eq!(v.volume, 1.0);
+    } else {
+        panic!("expected PaintKind::Image");
+    }
+
+    // A paint without video has label "Image" and omits "video" field in JSON
+    let p_img = Paint::image("poster_hash", ImageScaleMode::Fill);
+    assert_eq!(p_img.label(), "Image");
+    let json_img = serde_json::to_string(&p_img).unwrap();
+    assert!(!json_img.contains("\"video\""));
 }

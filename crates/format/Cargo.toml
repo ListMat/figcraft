@@ -18,3 +18,5 @@ flate2 = { workspace = true }
 ruzstd = { workspace = true }
 sha2 = { workspace = true }
 image = { workspace = true }
+mp4 = { workspace = true }
+rusty_h264 = { workspace = true }

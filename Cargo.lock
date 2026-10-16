@@ -608,6 +608,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
+
+[[package]]
 name = "byteorder-lite"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1077,9 +1083,9 @@ dependencies = [
 
 [[package]]
 name = "eframe"
-version = "0.36.2"
+version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55ad41fac6e3149abb4866e93df37dbd33baa95db525c3368c944584e95a5dc2"
+checksum = "1a9f6000a8c01ca5b79bb914777c85902a5173d9f6c44278463aa0039bee4ca4"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1112,9 +1118,7 @@ dependencies = [
 
 [[package]]
 name = "egui"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc938cc27cd911415e1e4d151bc56ff9df063d8db081374e87aeb805ea74b2ba"
+version = "0.36.0"
 dependencies = [
  "accesskit",
  "ahash",
@@ -1132,9 +1136,9 @@ dependencies = [
 
 [[package]]
 name = "egui-wgpu"
-version = "0.36.2"
+version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cef1f6d1bba40b09a4d0d62cb822b81030922cfbf65c5373398c3a3caafc5bd"
+checksum = "a262a88482609aeda48457fa6f76f5b754b2965e88797c22ac8ab2709f397906"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1152,9 +1156,9 @@ dependencies = [
 
 [[package]]
 name = "egui-winit"
-version = "0.36.2"
+version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98466000559d66ba4db786a30448b01483946add4188e7f10f522a27b4fb89cc"
+checksum = "bcc5ff243c9d41a665caeeb1e2b18258904524eb9f7c6840e00e9055017f0ade"
 dependencies = [
  "accesskit_winit",
  "arboard",
@@ -1173,9 +1177,9 @@ dependencies = [
 
 [[package]]
 name = "egui_extras"
-version = "0.36.2"
+version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05cbdc785020861553f230f23d330ba1fb72613b9d8e0e457f3bdc8ba6db6dcf"
+checksum = "b2cb8e069ccbb4b9f49e9c8f52637a088dc520b1d20f4071fdcb801ec4606fc4"
 dependencies = [
  "ahash",
  "egui",
@@ -1187,9 +1191,9 @@ dependencies = [
 
 [[package]]
 name = "egui_glow"
-version = "0.36.2"
+version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "606ed4167daf341e5753d703285c4c1d562324b2c07aa8f405cd7d066fe58f3b"
+checksum = "cc088c86612837efb5a79a0cef947edc59db0bf52a2230785836d27005866b58"
 dependencies = [
  "bytemuck",
  "egui",
@@ -1208,8 +1212,6 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 [[package]]
 name = "emath"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52c8d4141cf0f60fb2f7aefaf352d3ffa5171ef0ab09731c64391801e95e48f1"
 dependencies = [
  "bytemuck",
 ]
@@ -1298,9 +1300,7 @@ dependencies = [
 
 [[package]]
 name = "epaint"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0ec0308dc23130fc1a7d4623a8534c2ed069c6dc84e258ee4f3de99615aa1a3"
+version = "0.36.0"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1537,6 +1537,8 @@ dependencies = [
  "figcraft-pathops",
  "flate2",
  "image",
+ "mp4",
+ "rusty_h264",
  "ruzstd",
  "serde",
  "serde_json",
@@ -2543,9 +2545,9 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "krilla"
-version = "0.8.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27da593198b20eeba65caeb73c2bbeec3e53ab08fa549898312ce81c4fce5e33"
+checksum = "0cd0ba7aeea683d25d7d991b8e1fa34e8f8e89b51710f8c5a46cb0679e81fe7d"
 dependencies = [
  "base64 0.22.1",
  "bumpalo",
@@ -2735,6 +2737,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mp4"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9ef834d5ed55e494a2ae350220314dc4aacd1c43a9498b00e320e0ea352a5c3"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "num-rational",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "naga"
 version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2819,6 +2835,37 @@ name = "nohash-hasher"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
+
+[[package]]
+name = "num-bigint"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-integer"
+version = "0.1.47"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-rational"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
+dependencies = [
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "serde",
+]
 
 [[package]]
 name = "num-traits"
@@ -3919,6 +3966,75 @@ dependencies = [
  "quick-error 1.2.3",
  "tempfile",
  "wait-timeout",
+]
+
+[[package]]
+name = "rusty_alloc"
+version = "1.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c93620fee9935a120a50df2086fe48fa072f7d391f129a5e04bf20ea9b83097d"
+dependencies = [
+ "libc",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "rusty_alloc-api"
+version = "1.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05ce52d7f72842a590e4588013d70ea02d27edbf6b6af9bc193f6e1ac173845a"
+dependencies = [
+ "rusty_alloc",
+]
+
+[[package]]
+name = "rusty_h264"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acc4385b919216f3148223bf790f47611676d3a4084083c0535eaa2d29478da8"
+dependencies = [
+ "rusty_h264-common",
+ "rusty_h264-decoder",
+ "rusty_h264-encoder",
+]
+
+[[package]]
+name = "rusty_h264-accel"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18110c8f692668ccf004393bee04e369d4f0f173dd0ea4b515080258e6f9c599"
+
+[[package]]
+name = "rusty_h264-common"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aaf982ae23ecf8f13015ec1c5576fe2935f4e4296b097ebc4233b5872623af2a"
+dependencies = [
+ "bytemuck",
+ "once_cell",
+ "portable-atomic",
+ "rusty_alloc-api",
+ "rusty_h264-accel",
+ "wide",
+]
+
+[[package]]
+name = "rusty_h264-decoder"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0f4deb1a3a5e928cbaa1dff7db6bc46262c850aedeb75cb5aeab890494c18a5"
+dependencies = [
+ "rusty_h264-common",
+]
+
+[[package]]
+name = "rusty_h264-encoder"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e037f6341a02f54021f7077735bd12e2fd61a749e1ee7248eee00466ef5fa4ba"
+dependencies = [
+ "rusty_h264-accel",
+ "rusty_h264-common",
 ]
 
 [[package]]
