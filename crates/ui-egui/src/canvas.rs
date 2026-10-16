@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_doc::{Document, NodeId, NodeKind};
 use figcraft_engine::Preedit;
 use figcraft_engine::tools::{PointerEvent, PointerKind, ToolId, selection_box, selection_frame};
@@ -262,6 +262,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     crate::versions::preview_banner(app, &ctx, rect);
     crate::branch_ui::banner(app, &ctx, rect);
     crate::dev_mode::focus_bar(app, &ctx, rect);
+    video_controls(app, &ctx);
     // The cursor: the tool's, unless something on the canvas with its own has the pointer.
     app.canvas.cursor = None;
     if let (true, Some(at)) = (own_cursor && resp.hovered(), ctx.input(|i| i.pointer.hover_pos())) {
@@ -1502,6 +1503,61 @@ fn rulers(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Document, sel
 pub fn fmt(v: f64) -> String {
     let r = (v * 100.0).round() / 100.0;
     if (r - r.round()).abs() < 1e-9 { format!("{}", r.round() as i64) } else { format!("{r}") }
+}
+
+fn video_controls(app: &mut FigApp, ctx: &egui::Context) {
+    let Ok(ds) = app.session.ds() else { return };
+    if ds.selection.len() != 1 {
+        return;
+    }
+    let sel_id = ds.selection[0];
+    let Some(node) = ds.doc.node(sel_id) else { return };
+    let Some(v_hash) = node.fills.iter().find_map(|p| match &p.kind {
+        figcraft_color::PaintKind::Image(img) => img.video.as_ref().map(|v| v.hash.clone()),
+        _ => None,
+    }) else { return };
+
+    let Some(q) = node_quad(app, &ds.doc, sel_id) else { return };
+    let bottom_y = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+    let center_x = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
+    let pill_pos = pos2(center_x, bottom_y + 12.0);
+
+    if !app.canvas.rect.expand(50.0).contains(pill_pos) {
+        return;
+    }
+
+    let is_playing = app.session.video_playback.is_playing(&v_hash);
+    let pts = app.session.video_playback.current_pts(&v_hash);
+    let dur = app.session.video_playback.duration(&v_hash);
+
+    let time_str = if dur > 0.0 {
+        format!("{:.1}s / {:.1}s", pts, dur)
+    } else {
+        format!("{:.1}s", pts)
+    };
+
+    egui::Area::new(Id::new(("video_floating_bar", sel_id)))
+        .order(egui::Order::Foreground)
+        .pivot(Align2::CENTER_TOP)
+        .fixed_pos(pill_pos)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(Color32::from_black_alpha(220))
+                .corner_radius(CornerRadius::same(14))
+                .stroke(Stroke::new(1.0, Color32::from_white_alpha(50)))
+                .inner_margin(egui::Margin::symmetric(10, 4))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        let icon = if is_playing { crate::icons::Icon::Pause } else { crate::icons::Icon::Play };
+                        let tip = if is_playing { tr("Pause") } else { tr("Play") };
+                        if crate::icons::button(ui, icon, 18.0, false, tip).clicked() {
+                            app.session.video_playback.toggle(&v_hash);
+                        }
+                        ui.label(egui::RichText::new(time_str).font(semibold(11.0)).color(Color32::WHITE));
+                    });
+                });
+        });
 }
 
 #[cfg(test)]

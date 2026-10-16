@@ -1253,7 +1253,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "mp4" | "m4v" => {
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            super::create::place_video(s, &json!({"data": b64, "x": x.unwrap_or(center.0), "y": y.unwrap_or(center.1), "name": file_stem(&name)}))
+            super::create::place_video(s, &json!({"data": b64, "x": x.unwrap_or(center.0), "y": y.unwrap_or(center.1), "name": file_stem(&name), "autoplay": true}))
         }
         _ => {
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);

@@ -1574,6 +1574,32 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
                     app.run(cmd, json!({"ids": ids, "index": i, "color": c.to_css_hex()}));
                 }
             }
+            PaintKind::Image(img) if img.video.is_some() => {
+                let v_hash = &img.video.as_ref().unwrap().hash;
+                let is_playing = app.session.video_playback.is_playing(v_hash);
+                let pts = app.session.video_playback.current_pts(v_hash);
+                let dur = app.session.video_playback.duration(v_hash);
+
+                let btn_w = 18.0;
+                let btn_r = Rect::from_min_size(pos2(text_r.min.x, r.center().y - 9.0), vec2(btn_w, 18.0));
+                let icon = if is_playing { Icon::Pause } else { Icon::Play };
+                let tip = if is_playing { tr("Pause video") } else { tr("Play video") };
+                let btn_resp = ui.interact(btn_r, Id::new(("vid_row_btn", fills, i)), Sense::click()).tip(tip);
+                if btn_resp.hovered() {
+                    ui.painter().rect_filled(btn_r, CornerRadius::same(3), t.hover);
+                }
+                icons::paint(ui.painter(), btn_r.shrink(2.0), icon, if is_playing { t.accent } else { t.icon });
+                if btn_resp.clicked() {
+                    app.session.video_playback.toggle(v_hash);
+                }
+
+                let time_str = if dur > 0.0 {
+                    format!("{:.1}s", pts)
+                } else {
+                    tr("Video").to_string()
+                };
+                child.painter().text(pos2(btn_r.max.x + 6.0, r.center().y), Align2::LEFT_CENTER, time_str, regular(11.0), t.text);
+            }
             _ => {
                 child.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, paint_label(p), regular(11.0), t.text);
             }

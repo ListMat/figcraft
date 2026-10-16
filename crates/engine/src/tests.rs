@@ -668,6 +668,7 @@ fn video_playback_commands_play_pause_seek_and_stream() {
         "path": video_path.to_str().unwrap(),
         "x": 0,
         "y": 0,
+        "autoplay": false,
     })).unwrap();
     let vid = id(&r);
 

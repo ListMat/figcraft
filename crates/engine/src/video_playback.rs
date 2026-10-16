@@ -69,10 +69,20 @@ impl VideoPlayer {
     /// Spawns a new video player with a dedicated background decoding worker.
     pub fn new(video_hash: String, video_bytes: Arc<Vec<u8>>, loop_playback: bool) -> Result<Self, FormatError> {
         // Probe header and duration upfront
-        let probe = VideoStreamDecoder::open(video_bytes.clone())?;
+        let mut probe = VideoStreamDecoder::open(video_bytes.clone())?;
         let duration = probe.duration_seconds();
         let w = probe.width();
         let h = probe.height();
+        let first_frame = probe.next_frame().ok().flatten();
+        let (latest_frame, latest_pixmap, fw, fh) = if let Some(f) = first_frame {
+            let fw = f.width;
+            let fh = f.height;
+            let size = IntSize::from_wh(fw, fh);
+            let pm = size.and_then(|sz| Pixmap::from_vec((*f.rgba).clone(), sz).map(Arc::new));
+            (Some(f.rgba), pm, fw, fh)
+        } else {
+            (None, None, w, h)
+        };
 
         let initial_state = SharedPlayerState {
             queue: VecDeque::with_capacity(RING_BUFFER_CAPACITY),
@@ -83,10 +93,10 @@ impl VideoPlayer {
             current_pts: 0.0,
             play_start_instant: None,
             play_start_pts: 0.0,
-            latest_frame: None,
-            latest_pixmap: None,
-            frame_width: w,
-            frame_height: h,
+            latest_frame,
+            latest_pixmap,
+            frame_width: fw,
+            frame_height: fh,
         };
 
         let state = Arc::new((Mutex::new(initial_state), Condvar::new()));
@@ -484,12 +494,17 @@ impl VideoPlaybackManager {
     }
 
     /// Ensures that all video assets present in the document have an active player spawned
-    /// and playing (looping).
+    /// and playing (looping). Preserves explicit user pause on already active players.
     pub fn ensure_document_videos(&self, doc: &figcraft_doc::Document) {
+        let mut map = match self.players.lock() {
+            Ok(m) => m,
+            Err(_) => return,
+        };
         for (hash, data) in &doc.videos {
-            if let Ok(player) = self.get_or_create(hash, data.bytes.clone(), true) {
-                if !player.is_playing() {
+            if !map.contains_key(hash) {
+                if let Ok(player) = VideoPlayer::new(hash.to_string(), data.bytes.clone(), true) {
                     player.play();
+                    map.insert(hash.to_string(), Arc::new(player));
                 }
             }
         }
