@@ -125,7 +125,3 @@ debug = false
 strip = true
 panic = "abort"
 
-[patch.crates-io]
-emath = { path = "patches/emath" }
-epaint = { path = "patches/epaint" }
-egui = { path = "patches/egui" }
