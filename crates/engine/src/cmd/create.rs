@@ -405,12 +405,11 @@ pub fn place_video(s: &mut Session, p: &Value) -> Result<Value> {
     let bytes_arc = doc.videos.get(&video_hash).map(|v| v.bytes.clone());
     ds.selection = vec![nid];
     let autoplay = boolean(p, "autoplay").unwrap_or(true);
-    if let Some(bytes_arc) = bytes_arc {
-        if let Ok(player) = s.video_playback.get_or_create(&video_hash, bytes_arc, true) {
-            if autoplay {
-                player.play();
-            }
-        }
+    if let Some(bytes_arc) = bytes_arc
+        && let Ok(player) = s.video_playback.get_or_create(&video_hash, bytes_arc, true)
+        && autoplay
+    {
+        player.play();
     }
     Ok(json!({
         "id": nid,

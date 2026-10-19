@@ -1575,7 +1575,10 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
                 }
             }
             PaintKind::Image(img) if img.video.is_some() => {
-                let v_hash = &img.video.as_ref().unwrap().hash;
+                let Some(v_ref) = &img.video else {
+                    return;
+                };
+                let v_hash = &v_ref.hash;
                 let is_playing = app.session.video_playback.is_playing(v_hash);
                 let pts = app.session.video_playback.current_pts(v_hash);
                 let dur = app.session.video_playback.duration(v_hash);
@@ -1593,11 +1596,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
                     app.session.video_playback.toggle(v_hash);
                 }
 
-                let time_str = if dur > 0.0 {
-                    format!("{:.1}s", pts)
-                } else {
-                    tr("Video").to_string()
-                };
+                let time_str = if dur > 0.0 { format!("{:.1}s", pts) } else { tr("Video").to_string() };
                 child.painter().text(pos2(btn_r.max.x + 6.0, r.center().y), Align2::LEFT_CENTER, time_str, regular(11.0), t.text);
             }
             _ => {

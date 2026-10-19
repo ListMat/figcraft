@@ -1,7 +1,7 @@
 //! Sequential video stream decoder with keyframe indexing, seeking, and YUV420-to-RGBA conversion.
 
-use std::sync::Arc;
 use crate::FormatError;
+use std::sync::Arc;
 
 /// An uncompressed, decoded video frame ready for presentation.
 #[derive(Clone, Debug)]
@@ -46,8 +46,8 @@ impl VideoStreamDecoder {
     pub fn open(bytes: Arc<Vec<u8>>) -> Result<Self, FormatError> {
         let slice_arc: Arc<[u8]> = bytes.as_slice().into();
         let cursor = std::io::Cursor::new(slice_arc);
-        let mut mp4 = mp4::Mp4Reader::read_header(cursor, bytes.len() as u64)
-            .map_err(|e| FormatError::Corrupt(format!("failed to read MP4 header: {e}")))?;
+        let mut mp4 =
+            mp4::Mp4Reader::read_header(cursor, bytes.len() as u64).map_err(|e| FormatError::Corrupt(format!("failed to read MP4 header: {e}")))?;
 
         let mut video_track_id = None;
         let mut track_w = 0;
@@ -70,11 +70,7 @@ impl VideoStreamDecoder {
             return Err(FormatError::Corrupt("video contains no samples".into()));
         }
         let duration_seconds = mp4.duration().as_secs_f64();
-        let fps = if duration_seconds > 0.0 {
-            f64::from(sample_count) / duration_seconds
-        } else {
-            30.0
-        };
+        let fps = if duration_seconds > 0.0 { f64::from(sample_count) / duration_seconds } else { 30.0 };
 
         let (sps, pps) = {
             let track = mp4.tracks().get(&track_id).ok_or_else(|| FormatError::Corrupt("missing video track".into()))?;
@@ -102,19 +98,11 @@ impl VideoStreamDecoder {
 
         for i in 1..=sample_count {
             if let Ok(Some(s)) = mp4.read_sample(track_id, i) {
-                let pts_seconds = if timescale > 0 {
-                    s.start_time as f64 / f64::from(timescale)
-                } else {
-                    f64::from(i - 1) / fps
-                };
+                let pts_seconds = if timescale > 0 { s.start_time as f64 / f64::from(timescale) } else { f64::from(i - 1) / fps };
                 if s.is_sync {
                     keyframes.push(i);
                 }
-                samples.push(SampleMeta {
-                    index: i,
-                    pts_seconds,
-                    is_keyframe: s.is_sync,
-                });
+                samples.push(SampleMeta { index: i, pts_seconds, is_keyframe: s.is_sync });
             }
         }
 
@@ -217,15 +205,17 @@ impl VideoStreamDecoder {
             let sample_idx = self.current_sample;
             self.current_sample += 1;
 
-            let sample = self.reader.read_sample(self.track_id, sample_idx)
+            let sample = self
+                .reader
+                .read_sample(self.track_id, sample_idx)
                 .map_err(|e| FormatError::Corrupt(e.to_string()))?
                 .ok_or_else(|| FormatError::Corrupt(format!("could not read sample {sample_idx}")))?;
 
             let is_keyframe = sample.is_sync || sample_idx == 1;
             let annex_b = self.sample_to_annex_b(&sample.bytes, is_keyframe);
 
-            let decoded = self.decoder.decode_stream(&annex_b)
-                .map_err(|e| FormatError::Corrupt(format!("decode error at sample {sample_idx}: {e:?}")))?;
+            let decoded =
+                self.decoder.decode_stream(&annex_b).map_err(|e| FormatError::Corrupt(format!("decode error at sample {sample_idx}: {e:?}")))?;
 
             if let Some(f0) = decoded.first() {
                 let fw = f0.width;
@@ -251,12 +241,7 @@ impl VideoStreamDecoder {
                     self.height = fh as u32;
                 }
 
-                return Ok(Some(VideoFrame {
-                    pts_seconds,
-                    width: fw as u32,
-                    height: fh as u32,
-                    rgba: Arc::new(rgba),
-                }));
+                return Ok(Some(VideoFrame { pts_seconds, width: fw as u32, height: fh as u32, rgba: Arc::new(rgba) }));
             }
         }
 
@@ -277,12 +262,7 @@ impl VideoStreamDecoder {
         };
 
         // Find nearest preceding keyframe
-        let keyframe_idx = self.keyframes
-            .iter()
-            .copied()
-            .filter(|&k| k <= target_idx)
-            .last()
-            .unwrap_or(1);
+        let keyframe_idx = self.keyframes.iter().copied().rfind(|&k| k <= target_idx).unwrap_or(1);
 
         // Reset decoder state and seek
         self.decoder = rusty_h264::Decoder::new();

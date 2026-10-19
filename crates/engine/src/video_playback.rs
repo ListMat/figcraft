@@ -107,16 +107,13 @@ impl VideoPlayer {
         let worker_bytes = video_bytes.clone();
 
         let builder = std::thread::Builder::new().name(format!("figcraft-video-{}", &video_hash[..8.min(video_hash.len())]));
-        let worker_handle = builder.spawn(move || {
-            worker_loop(worker_bytes, worker_state, worker_running);
-        }).map_err(|e| FormatError::Io(format!("failed to spawn video worker: {e}")))?;
+        let worker_handle = builder
+            .spawn(move || {
+                worker_loop(worker_bytes, worker_state, worker_running);
+            })
+            .map_err(|e| FormatError::Io(format!("failed to spawn video worker: {e}")))?;
 
-        Ok(Self {
-            video_hash,
-            state,
-            running,
-            worker_handle: Some(worker_handle),
-        })
+        Ok(Self { video_hash, state, running, worker_handle: Some(worker_handle) })
     }
 
     pub fn video_hash(&self) -> &str {
@@ -125,30 +122,30 @@ impl VideoPlayer {
 
     pub fn play(&self) {
         let (lock, cvar) = &*self.state;
-        if let Ok(mut s) = lock.lock() {
-            if !s.is_playing {
-                s.is_playing = true;
-                s.play_start_instant = Some(Instant::now());
-                s.play_start_pts = s.current_pts;
-                s.command = Some(WorkerCommand::Play);
-                cvar.notify_all();
-            }
+        if let Ok(mut s) = lock.lock()
+            && !s.is_playing
+        {
+            s.is_playing = true;
+            s.play_start_instant = Some(Instant::now());
+            s.play_start_pts = s.current_pts;
+            s.command = Some(WorkerCommand::Play);
+            cvar.notify_all();
         }
     }
 
     pub fn pause(&self) {
         let (lock, cvar) = &*self.state;
-        if let Ok(mut s) = lock.lock() {
-            if s.is_playing {
-                if let Some(start) = s.play_start_instant {
-                    let elapsed = start.elapsed().as_secs_f64();
-                    s.current_pts = (s.play_start_pts + elapsed).clamp(0.0, s.duration_seconds);
-                }
-                s.is_playing = false;
-                s.play_start_instant = None;
-                s.command = Some(WorkerCommand::Pause);
-                cvar.notify_all();
+        if let Ok(mut s) = lock.lock()
+            && s.is_playing
+        {
+            if let Some(start) = s.play_start_instant {
+                let elapsed = start.elapsed().as_secs_f64();
+                s.current_pts = (s.play_start_pts + elapsed).clamp(0.0, s.duration_seconds);
             }
+            s.is_playing = false;
+            s.play_start_instant = None;
+            s.command = Some(WorkerCommand::Pause);
+            cvar.notify_all();
         }
     }
 
@@ -206,11 +203,7 @@ impl VideoPlayer {
                 if let Some(start) = s.play_start_instant {
                     let elapsed = start.elapsed().as_secs_f64();
                     let pts = s.play_start_pts + elapsed;
-                    if s.duration_seconds > 0.0 && s.loop_playback {
-                        pts.rem_euclid(s.duration_seconds)
-                    } else {
-                        pts.min(s.duration_seconds)
-                    }
+                    if s.duration_seconds > 0.0 && s.loop_playback { pts.rem_euclid(s.duration_seconds) } else { pts.min(s.duration_seconds) }
                 } else {
                     s.current_pts
                 }
@@ -241,33 +234,38 @@ impl VideoPlayer {
         let (lock, cvar) = &*self.state;
         let mut s = lock.lock().ok()?;
 
+        // If time wrapped around (looping) or rewound by seeking:
+        if pts < s.current_pts - 0.25 {
+            s.queue.retain(|f| f.pts_seconds <= pts + 0.25);
+        }
+        s.current_pts = pts;
+
         let mut updated = false;
         while let Some(front) = s.queue.front() {
-            if front.pts_seconds <= pts {
-                if let Some(f) = s.queue.pop_front() {
-                    if let Some(pm) = f.pixmap {
-                        s.latest_pixmap = Some(pm);
-                    }
-                    s.latest_frame = Some(f.rgba);
-                    s.frame_width = f.width;
-                    s.frame_height = f.height;
-                    updated = true;
-                }
-            } else {
+            if front.pts_seconds > pts {
                 break;
+            }
+            if let Some(f) = s.queue.pop_front() {
+                if let Some(pm) = f.pixmap {
+                    s.latest_pixmap = Some(pm);
+                }
+                s.latest_frame = Some(f.rgba);
+                s.frame_width = f.width;
+                s.frame_height = f.height;
+                updated = true;
             }
         }
 
-        if s.latest_pixmap.is_none() {
-            if let Some(front) = s.queue.pop_front() {
-                if let Some(pm) = front.pixmap {
-                    s.latest_pixmap = Some(pm);
-                }
-                s.latest_frame = Some(front.rgba);
-                s.frame_width = front.width;
-                s.frame_height = front.height;
-                updated = true;
+        if s.latest_pixmap.is_none()
+            && let Some(front) = s.queue.pop_front()
+        {
+            if let Some(pm) = front.pixmap {
+                s.latest_pixmap = Some(pm);
             }
+            s.latest_frame = Some(front.rgba);
+            s.frame_width = front.width;
+            s.frame_height = front.height;
+            updated = true;
         }
 
         if updated {
@@ -279,20 +277,12 @@ impl VideoPlayer {
 
     pub fn dimensions(&self) -> (u32, u32) {
         let (lock, _) = &*self.state;
-        if let Ok(s) = lock.lock() {
-            (s.frame_width, s.frame_height)
-        } else {
-            (0, 0)
-        }
+        if let Ok(s) = lock.lock() { (s.frame_width, s.frame_height) } else { (0, 0) }
     }
 }
 
 /// Runloop for the background decoding thread.
-fn worker_loop(
-    video_bytes: Arc<Vec<u8>>,
-    state: Arc<(Mutex<SharedPlayerState>, Condvar)>,
-    running: Arc<AtomicBool>,
-) {
+fn worker_loop(video_bytes: Arc<Vec<u8>>, state: Arc<(Mutex<SharedPlayerState>, Condvar)>, running: Arc<AtomicBool>) {
     let mut decoder = match VideoStreamDecoder::open(video_bytes) {
         Ok(d) => d,
         Err(_) => return,
@@ -314,11 +304,7 @@ fn worker_loop(
 
             // Wait if not playing, or if ring buffer is full
             if cmd.is_none() && (!is_playing || queue_len >= RING_BUFFER_CAPACITY) {
-                let wait_duration = if is_playing {
-                    Duration::from_millis(8)
-                } else {
-                    Duration::from_millis(200)
-                };
+                let wait_duration = if is_playing { Duration::from_millis(8) } else { Duration::from_millis(200) };
                 let _ = cvar.wait_timeout(s, wait_duration);
                 continue;
             }
@@ -345,22 +331,13 @@ fn worker_loop(
                     let size = IntSize::from_wh(w, h);
                     let pixmap = size.and_then(|sz| Pixmap::from_vec((*frame.rgba).clone(), sz).map(Arc::new));
                     let Ok(mut s) = lock.lock() else { break };
-                    s.queue.push_back(DecodedFrame {
-                        pts_seconds: frame.pts_seconds,
-                        width: w,
-                        height: h,
-                        rgba: frame.rgba,
-                        pixmap,
-                    });
+                    s.queue.push_back(DecodedFrame { pts_seconds: frame.pts_seconds, width: w, height: h, rgba: frame.rgba, pixmap });
                 }
                 Ok(None) => {
                     // Reached end of stream
                     let Ok(mut s) = lock.lock() else { break };
                     if s.loop_playback {
                         let _ = decoder.rewind();
-                        s.play_start_instant = Some(Instant::now());
-                        s.play_start_pts = 0.0;
-                        s.current_pts = 0.0;
                     } else {
                         s.is_playing = false;
                         s.play_start_instant = None;
@@ -379,24 +356,17 @@ fn worker_loop(
 #[derive(Default)]
 pub struct VideoPlaybackManager {
     players: Mutex<HashMap<String, Arc<VideoPlayer>>>,
+    failed: Mutex<std::collections::HashSet<String>>,
     tick: std::sync::atomic::AtomicU64,
 }
 
 impl VideoPlaybackManager {
     pub fn new() -> Self {
-        Self {
-            players: Mutex::new(HashMap::new()),
-            tick: std::sync::atomic::AtomicU64::new(0),
-        }
+        Self { players: Mutex::new(HashMap::new()), failed: Mutex::new(std::collections::HashSet::new()), tick: std::sync::atomic::AtomicU64::new(0) }
     }
 
     /// Gets an existing player or creates a new background player for `video_hash`.
-    pub fn get_or_create(
-        &self,
-        video_hash: &str,
-        video_bytes: Arc<Vec<u8>>,
-        loop_playback: bool,
-    ) -> Result<Arc<VideoPlayer>, FormatError> {
+    pub fn get_or_create(&self, video_hash: &str, video_bytes: Arc<Vec<u8>>, loop_playback: bool) -> Result<Arc<VideoPlayer>, FormatError> {
         let mut map = self.players.lock().map_err(|e| FormatError::Io(e.to_string()))?;
         if let Some(player) = map.get(video_hash) {
             Ok(player.clone())
@@ -408,78 +378,78 @@ impl VideoPlaybackManager {
     }
 
     pub fn play(&self, video_hash: &str) -> bool {
-        if let Ok(map) = self.players.lock() {
-            if let Some(player) = map.get(video_hash) {
-                player.play();
-                return true;
-            }
+        if let Ok(map) = self.players.lock()
+            && let Some(player) = map.get(video_hash)
+        {
+            player.play();
+            return true;
         }
         false
     }
 
     pub fn pause(&self, video_hash: &str) -> bool {
-        if let Ok(map) = self.players.lock() {
-            if let Some(player) = map.get(video_hash) {
-                player.pause();
-                return true;
-            }
+        if let Ok(map) = self.players.lock()
+            && let Some(player) = map.get(video_hash)
+        {
+            player.pause();
+            return true;
         }
         false
     }
 
     pub fn toggle(&self, video_hash: &str) -> Option<bool> {
-        if let Ok(map) = self.players.lock() {
-            if let Some(player) = map.get(video_hash) {
-                return Some(player.toggle());
-            }
+        if let Ok(map) = self.players.lock()
+            && let Some(player) = map.get(video_hash)
+        {
+            return Some(player.toggle());
         }
         None
     }
 
     pub fn seek(&self, video_hash: &str, timestamp_seconds: f64) -> bool {
-        if let Ok(map) = self.players.lock() {
-            if let Some(player) = map.get(video_hash) {
-                player.seek(timestamp_seconds);
-                return true;
-            }
+        if let Ok(map) = self.players.lock()
+            && let Some(player) = map.get(video_hash)
+        {
+            player.seek(timestamp_seconds);
+            return true;
         }
         false
     }
 
     pub fn is_playing(&self, video_hash: &str) -> bool {
-        if let Ok(map) = self.players.lock() {
-            if let Some(player) = map.get(video_hash) {
-                return player.is_playing();
-            }
+        if let Ok(map) = self.players.lock()
+            && let Some(player) = map.get(video_hash)
+        {
+            return player.is_playing();
         }
         false
     }
 
     pub fn current_pts(&self, video_hash: &str) -> f64 {
-        if let Ok(map) = self.players.lock() {
-            if let Some(player) = map.get(video_hash) {
-                return player.current_pts();
-            }
+        if let Ok(map) = self.players.lock()
+            && let Some(player) = map.get(video_hash)
+        {
+            return player.current_pts();
         }
         0.0
     }
 
     pub fn duration(&self, video_hash: &str) -> f64 {
-        if let Ok(map) = self.players.lock() {
-            if let Some(player) = map.get(video_hash) {
-                return player.duration();
-            }
+        if let Ok(map) = self.players.lock()
+            && let Some(player) = map.get(video_hash)
+        {
+            return player.duration();
         }
         0.0
     }
 
     pub fn stop(&self, video_hash: &str) -> bool {
-        if let Ok(mut map) = self.players.lock() {
-            if let Some(player) = map.remove(video_hash) {
-                player.stop();
-                figcraft_render::images::clear_video_frame(video_hash);
-                return true;
-            }
+        if let Ok(mut map) = self.players.lock()
+            && let Some(player) = map.remove(video_hash)
+        {
+            player.stop();
+            figcraft_render::images::clear_video_frame(video_hash);
+            return true;
         }
         false
     }
@@ -491,6 +461,9 @@ impl VideoPlaybackManager {
                 figcraft_render::images::clear_video_frame(&hash);
             }
         }
+        if let Ok(mut failed) = self.failed.lock() {
+            failed.clear();
+        }
     }
 
     /// Ensures that all video assets present in the document have an active player spawned
@@ -500,11 +473,20 @@ impl VideoPlaybackManager {
             Ok(m) => m,
             Err(_) => return,
         };
+        let mut failed = match self.failed.lock() {
+            Ok(f) => f,
+            Err(_) => return,
+        };
         for (hash, data) in &doc.videos {
-            if !map.contains_key(hash) {
-                if let Ok(player) = VideoPlayer::new(hash.to_string(), data.bytes.clone(), true) {
-                    player.play();
-                    map.insert(hash.to_string(), Arc::new(player));
+            if !map.contains_key(hash) && !failed.contains(hash) {
+                match VideoPlayer::new(hash.to_string(), data.bytes.clone(), true) {
+                    Ok(player) => {
+                        player.play();
+                        map.insert(hash.to_string(), Arc::new(player));
+                    }
+                    Err(_) => {
+                        failed.insert(hash.clone());
+                    }
                 }
             }
         }
@@ -524,11 +506,11 @@ impl VideoPlaybackManager {
             if player.is_playing() {
                 any_playing = true;
             }
-            if let Some((pixmap, changed)) = player.sample_pixmap_with_change() {
-                if changed {
-                    figcraft_render::images::set_video_frame(hash, pixmap);
-                    any_updated = true;
-                }
+            if let Some((pixmap, changed)) = player.sample_pixmap_with_change()
+                && changed
+            {
+                figcraft_render::images::set_video_frame(hash, pixmap);
+                any_updated = true;
             }
         }
         if any_updated {

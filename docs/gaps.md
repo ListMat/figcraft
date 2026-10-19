@@ -256,6 +256,11 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   `ATTRIBUTION.md`).
 
 ### 12. Video fills; HEIC images
+- **Landed (2026-10-17):** pure-Rust offline temporal video export (MP4/H.264 & animated GIF):
+  deterministic time-sampled rendering via `figcraft_render::render_area_at`, lazy O(1) frame streaming,
+  RGB-to-YUV BT.601 conversion, Annex-B NAL unit parser, AVC parameter sets muxing into MP4 containers
+  (`mp4::Mp4Writer`) and looping GIFs (`image::codecs::gif::GifEncoder`), integrated into `file.export`
+  with auto-duration and FPS configuration in the Export panel (`crates/ui-egui/src/export_panel.rs`).
 - **Landed (2026-10-16):** native pure-Rust MP4/H.264 video playback on canvas (Phase 1 & Phase 2
   landed): `video.place` import with dedicated archive persistence (`videos/<hash>`), pure-Rust
   sequential decoding (`rusty_h264`, `mp4`), background worker with 4-frame ring buffer and `Condvar`

@@ -90,7 +90,7 @@ impl Cx<'_> {
 const INDENT: f32 = 12.0;
 
 /// The kinds an action can be, as its menus list them (a separator before each in `GROUPS`).
-const ACTIONS: [&str; 11] = [
+const ACTIONS: [&str; 14] = [
     tr_noop("Navigate to"),
     tr_noop("Change to"),
     tr_noop("Back"),
@@ -99,11 +99,14 @@ const ACTIONS: [&str; 11] = [
     tr_noop("Open overlay"),
     tr_noop("Swap overlay"),
     tr_noop("Close overlay"),
+    tr_noop("Play video"),
+    tr_noop("Pause video"),
+    tr_noop("Toggle video"),
     tr_noop("Set variable"),
     tr_noop("Set variable mode"),
     tr_noop("Conditional"),
 ];
-const GROUPS: [usize; 5] = [2, 4, 5, 8, 10];
+const GROUPS: [usize; 6] = [2, 4, 5, 8, 11, 13];
 
 /// The action kinds as menu items; the one picked.
 fn action_menu(ui: &mut Ui) -> Option<&'static str> {

@@ -1,8 +1,8 @@
 //! Video playback commands: play, pause, seek, toggle, and state queries.
 
-use std::sync::Arc;
 use figcraft_color::PaintKind;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use crate::params::{self, num, string};
 use crate::{CommandSpec, EngineError, Result, Session, bad, spec};
@@ -15,18 +15,15 @@ fn resolve_video(s: &Session, p: &Value, cmd: &str) -> Result<(String, Arc<Vec<u
         return Ok((hash, v.bytes.clone(), true));
     }
 
-    let id = params::id(p, "id")
-        .or_else(|| s.selection().first().copied())
-        .ok_or_else(|| bad(cmd, "select a video layer or pass `id`"))?;
+    let id = params::id(p, "id").or_else(|| s.selection().first().copied()).ok_or_else(|| bad(cmd, "select a video layer or pass `id`"))?;
 
     let node = doc.node(id).ok_or(EngineError::NoNode(id))?;
     for paint in &node.fills {
-        if let PaintKind::Image(img) = &paint.kind {
-            if let Some(v_ref) = &img.video {
-                if let Some(v) = doc.videos.get(&v_ref.hash) {
-                    return Ok((v_ref.hash.clone(), v.bytes.clone(), v_ref.loop_playback));
-                }
-            }
+        if let PaintKind::Image(img) = &paint.kind
+            && let Some(v_ref) = &img.video
+            && let Some(v) = doc.videos.get(&v_ref.hash)
+        {
+            return Ok((v_ref.hash.clone(), v.bytes.clone(), v_ref.loop_playback));
         }
     }
     Err(EngineError::Other(format!("node {id} has no video fill")))
@@ -34,8 +31,7 @@ fn resolve_video(s: &Session, p: &Value, cmd: &str) -> Result<(String, Arc<Vec<u
 
 fn play_video(s: &mut Session, p: &Value) -> Result<Value> {
     let (hash, bytes, loop_playback) = resolve_video(s, p, "video.play")?;
-    let player = s.video_playback.get_or_create(&hash, bytes, loop_playback)
-        .map_err(|e| EngineError::Other(e.to_string()))?;
+    let player = s.video_playback.get_or_create(&hash, bytes, loop_playback).map_err(|e| EngineError::Other(e.to_string()))?;
     player.play();
     Ok(json!({
         "hash": hash,
@@ -58,8 +54,7 @@ fn pause_video(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn toggle_video(s: &mut Session, p: &Value) -> Result<Value> {
     let (hash, bytes, loop_playback) = resolve_video(s, p, "video.toggle")?;
-    let player = s.video_playback.get_or_create(&hash, bytes, loop_playback)
-        .map_err(|e| EngineError::Other(e.to_string()))?;
+    let player = s.video_playback.get_or_create(&hash, bytes, loop_playback).map_err(|e| EngineError::Other(e.to_string()))?;
     let is_playing = player.toggle();
     Ok(json!({
         "hash": hash,
@@ -71,8 +66,7 @@ fn toggle_video(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn seek_video(s: &mut Session, p: &Value) -> Result<Value> {
     let (hash, bytes, loop_playback) = resolve_video(s, p, "video.seek")?;
-    let player = s.video_playback.get_or_create(&hash, bytes, loop_playback)
-        .map_err(|e| EngineError::Other(e.to_string()))?;
+    let player = s.video_playback.get_or_create(&hash, bytes, loop_playback).map_err(|e| EngineError::Other(e.to_string()))?;
     let target_time = num(p, "time").unwrap_or(0.0);
     player.seek(target_time);
     s.video_playback.sync_render_frames();
@@ -85,8 +79,7 @@ fn seek_video(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn video_state(s: &mut Session, p: &Value) -> Result<Value> {
     let (hash, bytes, loop_playback) = resolve_video(s, p, "video.state")?;
-    let player = s.video_playback.get_or_create(&hash, bytes, loop_playback)
-        .map_err(|e| EngineError::Other(e.to_string()))?;
+    let player = s.video_playback.get_or_create(&hash, bytes, loop_playback).map_err(|e| EngineError::Other(e.to_string()))?;
     Ok(json!({
         "hash": hash,
         "playing": player.is_playing(),
@@ -98,40 +91,10 @@ fn video_state(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        spec!(
-            "video.play",
-            "Play video",
-            "`id`: node id (or selected node), `hash`: optional video hash",
-            false,
-            play_video
-        ),
-        spec!(
-            "video.pause",
-            "Pause video",
-            "`id`: node id (or selected node), `hash`: optional video hash",
-            false,
-            pause_video
-        ),
-        spec!(
-            "video.toggle",
-            "Toggle video play/pause",
-            "`id`: node id (or selected node), `hash`: optional video hash",
-            false,
-            toggle_video
-        ),
-        spec!(
-            "video.seek",
-            "Seek video",
-            "`time`: target timestamp in seconds, `id`: node id (or selected node)",
-            false,
-            seek_video
-        ),
-        spec!(
-            "video.state",
-            "Get video playback state",
-            "`id`: node id (or selected node), `hash`: optional video hash",
-            false,
-            video_state
-        ),
+        spec!("video.play", "Play video", "`id`: node id (or selected node), `hash`: optional video hash", false, play_video),
+        spec!("video.pause", "Pause video", "`id`: node id (or selected node), `hash`: optional video hash", false, pause_video),
+        spec!("video.toggle", "Toggle video play/pause", "`id`: node id (or selected node), `hash`: optional video hash", false, toggle_video),
+        spec!("video.seek", "Seek video", "`time`: target timestamp in seconds, `id`: node id (or selected node)", false, seek_video),
+        spec!("video.state", "Get video playback state", "`id`: node id (or selected node), `hash`: optional video hash", false, video_state),
     ]
 }

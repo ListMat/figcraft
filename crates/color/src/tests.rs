@@ -95,8 +95,15 @@ fn colour_deserializes_from_many_forms() {
 
 #[test]
 fn crop_defaults_to_fill_and_roundtrips() {
-    let img =
-        ImagePaint { image: String::new(), scale_mode: ImageScaleMode::Crop, scale: 1.0, rotation: 0, crop: None, filters: ImageFilters::default(), video: None };
+    let img = ImagePaint {
+        image: String::new(),
+        scale_mode: ImageScaleMode::Crop,
+        scale: 1.0,
+        rotation: 0,
+        crop: None,
+        filters: ImageFilters::default(),
+        video: None,
+    };
     // A 200×100 image in a 100×100 box: Fill scales to 100 tall, 200 wide, centred → x from -0.5 to 1.5.
     let c = img.effective_crop(200.0, 100.0, 100.0, 100.0);
     let (x0, y0, x1, y1) = ImagePaint::crop_rect(c);

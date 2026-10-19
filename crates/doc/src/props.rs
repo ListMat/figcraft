@@ -1233,18 +1233,26 @@ pub enum ExportFormat {
     Svg,
     Pdf,
     Webp,
+    Mp4,
+    Gif,
 }
 
 impl ExportFormat {
     /// Every format, in the order the export menus list them.
-    pub const ALL: [ExportFormat; 5] = [ExportFormat::Png, ExportFormat::Jpg, ExportFormat::Svg, ExportFormat::Pdf, ExportFormat::Webp];
+    pub const ALL: [ExportFormat; 7] =
+        [ExportFormat::Png, ExportFormat::Jpg, ExportFormat::Svg, ExportFormat::Pdf, ExportFormat::Webp, ExportFormat::Mp4, ExportFormat::Gif];
 
     /// Pixel formats (their size depends on the export scale).
     pub fn is_raster(self) -> bool {
         matches!(self, ExportFormat::Png | ExportFormat::Jpg | ExportFormat::Webp)
     }
 
-    /// The name menus show ("PNG", "WebP").
+    /// Whether this format represents a temporal video or animated sequence.
+    pub fn is_temporal(self) -> bool {
+        matches!(self, ExportFormat::Mp4 | ExportFormat::Gif)
+    }
+
+    /// The name menus show ("PNG", "WebP", "MP4", "GIF").
     pub fn label(self) -> &'static str {
         match self {
             ExportFormat::Png => "PNG",
@@ -1252,6 +1260,8 @@ impl ExportFormat {
             ExportFormat::Svg => "SVG",
             ExportFormat::Pdf => "PDF",
             ExportFormat::Webp => "WebP",
+            ExportFormat::Mp4 => "MP4",
+            ExportFormat::Gif => "GIF",
         }
     }
 
@@ -1262,6 +1272,8 @@ impl ExportFormat {
             ExportFormat::Svg => "svg",
             ExportFormat::Pdf => "pdf",
             ExportFormat::Webp => "webp",
+            ExportFormat::Mp4 => "mp4",
+            ExportFormat::Gif => "gif",
         }
     }
     pub fn from_ext(s: &str) -> Option<Self> {
@@ -1271,6 +1283,8 @@ impl ExportFormat {
             "svg" => Some(ExportFormat::Svg),
             "pdf" => Some(ExportFormat::Pdf),
             "webp" => Some(ExportFormat::Webp),
+            "mp4" => Some(ExportFormat::Mp4),
+            "gif" => Some(ExportFormat::Gif),
             _ => None,
         }
     }
@@ -1439,6 +1453,12 @@ pub struct ExportSetting {
     /// SVG: strokes as `stroke` attributes where that's exact (on), else as outlines.
     #[serde(skip_serializing_if = "is_true")]
     pub svg_simplify_stroke: bool,
+    /// Video/animation: frames per second (e.g. 30, 60). Defaults to 30.
+    #[serde(skip_serializing_if = "is_default_fps")]
+    pub fps: u32,
+    /// Video/animation: duration in seconds (None: auto-match longest video in node).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
 }
 
 impl Default for ExportSetting {
@@ -1453,8 +1473,14 @@ impl Default for ExportSetting {
             svg_outline_text: true,
             svg_id_attribute: false,
             svg_simplify_stroke: true,
+            fps: 30,
+            duration: None,
         }
     }
+}
+
+fn is_default_fps(fps: &u32) -> bool {
+    *fps == 30 || *fps == 0
 }
 
 fn is_true(b: &bool) -> bool {

@@ -33,6 +33,7 @@ pub enum Trigger {
     KeyPress {
         key: String,
     },
+    OnMediaEnd,
 }
 
 impl Trigger {
@@ -47,6 +48,7 @@ impl Trigger {
             Trigger::MouseDown => "Mouse down".into(),
             Trigger::MouseUp => "Mouse up".into(),
             Trigger::AfterDelay { ms } => format!("After delay {ms}ms"),
+            Trigger::OnMediaEnd => "When video ends".into(),
             // A controller button names itself ("Gamepad A").
             Trigger::KeyPress { key } if is_gamepad_button(key) => key.clone(),
             Trigger::KeyPress { key } => format!("Key/Gamepad {key}"),
@@ -567,6 +569,18 @@ pub enum Action {
     Conditional {
         blocks: Vec<ConditionalBlock>,
     },
+    PlayMedia {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dest: Option<NodeId>,
+    },
+    PauseMedia {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dest: Option<NodeId>,
+    },
+    ToggleMedia {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dest: Option<NodeId>,
+    },
 }
 
 /// One branch of a conditional action.
@@ -672,6 +686,9 @@ impl Action {
             Action::SetVariable { .. } => "Set variable",
             Action::SetVariableMode { .. } => "Set variable mode",
             Action::Conditional { .. } => "Conditional",
+            Action::PlayMedia { .. } => "Play video",
+            Action::PauseMedia { .. } => "Pause video",
+            Action::ToggleMedia { .. } => "Toggle video",
         }
     }
 
@@ -696,7 +713,10 @@ impl Action {
             | Action::ScrollTo { dest, .. }
             | Action::OpenOverlay { dest, .. }
             | Action::SwapOverlay { dest }
-            | Action::ChangeTo { dest } => Some(*dest),
+            | Action::ChangeTo { dest }
+            | Action::PlayMedia { dest: Some(dest) }
+            | Action::PauseMedia { dest: Some(dest) }
+            | Action::ToggleMedia { dest: Some(dest) } => Some(*dest),
             _ => None,
         }
     }

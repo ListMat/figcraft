@@ -711,6 +711,9 @@ fn normalize(n: &mut Node, ix: &dyn Fn(NodeId) -> NodeId) {
             | Action::SwapOverlay { dest }
             | Action::ChangeTo { dest }
             | Action::ScrollTo { dest, .. } => *dest = ix(*dest),
+            Action::PlayMedia { dest: Some(dest) } | Action::PauseMedia { dest: Some(dest) } | Action::ToggleMedia { dest: Some(dest) } => {
+                *dest = ix(*dest)
+            }
             _ => {}
         });
         let animated = it.actions.iter().any(|a| {

@@ -21,9 +21,11 @@ pub mod fig;
 pub mod library;
 pub mod rest;
 pub mod thumbnail;
+pub mod video_export;
 pub mod video_stream;
 
 pub use library::{is_valid_library_id, read_library, read_library_within};
+pub use video_export::{export_gif, export_mp4, rgba_to_yuv};
 pub use video_stream::{VideoFrame, VideoStreamDecoder};
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -204,14 +206,7 @@ pub fn video_hash(bytes: &[u8]) -> String {
 }
 
 /// Convert YUV420 planar buffer to RGBA8 buffer.
-pub fn yuv420_to_rgba(
-    y: &[u8],
-    u: &[u8],
-    v: &[u8],
-    width: usize,
-    height: usize,
-    out_rgba: &mut [u8],
-) {
+pub fn yuv420_to_rgba(y: &[u8], u: &[u8], v: &[u8], width: usize, height: usize, out_rgba: &mut [u8]) {
     if width == 0 || height == 0 {
         return;
     }
@@ -260,7 +255,7 @@ pub fn yuv420_to_rgba(
             out_row[out1 + 3] = 255;
         }
 
-        if width % 2 != 0 {
+        if !width.is_multiple_of(2) {
             let col = width - 1;
             let u_val = u_row.get(col / 2).copied().unwrap_or(128) as i32 - 128;
             let v_val = v_row.get(col / 2).copied().unwrap_or(128) as i32 - 128;
@@ -278,8 +273,7 @@ pub fn yuv420_to_rgba(
 pub(crate) fn read_video_metadata(bytes: &[u8]) -> Result<(u32, u32, f64), FormatError> {
     let size = bytes.len() as u64;
     let cursor = std::io::Cursor::new(bytes);
-    let mp4 = mp4::Mp4Reader::read_header(cursor, size)
-        .map_err(|e| FormatError::Corrupt(format!("invalid mp4 container: {e}")))?;
+    let mp4 = mp4::Mp4Reader::read_header(cursor, size).map_err(|e| FormatError::Corrupt(format!("invalid mp4 container: {e}")))?;
 
     for track in mp4.tracks().values() {
         if track.track_type().map_err(|e| FormatError::Corrupt(e.to_string()))? == mp4::TrackType::Video {
@@ -296,8 +290,7 @@ pub(crate) fn read_video_metadata(bytes: &[u8]) -> Result<(u32, u32, f64), Forma
 pub fn extract_video_metadata_and_poster(bytes: &[u8]) -> Result<(u32, u32, f64, Vec<u8>), FormatError> {
     let size = bytes.len() as u64;
     let cursor = std::io::Cursor::new(bytes);
-    let mut mp4 = mp4::Mp4Reader::read_header(cursor, size)
-        .map_err(|e| FormatError::Corrupt(format!("invalid mp4 container: {e}")))?;
+    let mut mp4 = mp4::Mp4Reader::read_header(cursor, size).map_err(|e| FormatError::Corrupt(format!("invalid mp4 container: {e}")))?;
 
     let mut video_track_id = None;
     let mut track_w = 0u32;
@@ -340,7 +333,8 @@ pub fn extract_video_metadata_and_poster(bytes: &[u8]) -> Result<(u32, u32, f64,
         (s, p)
     };
 
-    let sample = mp4.read_sample(track_id, 1)
+    let sample = mp4
+        .read_sample(track_id, 1)
         .map_err(|e| FormatError::Corrupt(e.to_string()))?
         .ok_or_else(|| FormatError::Corrupt("could not read first video sample".into()))?;
 
@@ -370,9 +364,7 @@ pub fn extract_video_metadata_and_poster(bytes: &[u8]) -> Result<(u32, u32, f64,
     }
 
     let mut decoder = rusty_h264::Decoder::new();
-    let frames = decoder
-        .decode_stream(&annex_b)
-        .map_err(|e| FormatError::Corrupt(format!("failed to decode video poster frame: {e:?}")))?;
+    let frames = decoder.decode_stream(&annex_b).map_err(|e| FormatError::Corrupt(format!("failed to decode video poster frame: {e:?}")))?;
 
     let f0 = frames.first().ok_or_else(|| FormatError::Corrupt("decoder produced no poster frame".into()))?;
     let fw = f0.width;
@@ -384,8 +376,8 @@ pub fn extract_video_metadata_and_poster(bytes: &[u8]) -> Result<(u32, u32, f64,
     let mut rgba = vec![0u8; fw * fh * 4];
     yuv420_to_rgba(&f0.y, &f0.u, &f0.v, fw, fh, &mut rgba);
 
-    let img = image::RgbaImage::from_raw(fw as u32, fh as u32, rgba)
-        .ok_or_else(|| FormatError::Corrupt("failed to construct RGBA poster image".into()))?;
+    let img =
+        image::RgbaImage::from_raw(fw as u32, fh as u32, rgba).ok_or_else(|| FormatError::Corrupt("failed to construct RGBA poster image".into()))?;
     let mut png_bytes = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png)
         .map_err(|e| FormatError::Corrupt(format!("failed to encode poster PNG: {e}")))?;
@@ -415,18 +407,9 @@ pub fn add_video(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, String, 
     let v_hash = video_hash(&bytes);
     let p_hash = image_hash(&poster_png);
 
-    doc.images.insert(p_hash.clone(), ImageData {
-        bytes: Arc::new(poster_png),
-        width: w,
-        height: h,
-    });
+    doc.images.insert(p_hash.clone(), ImageData { bytes: Arc::new(poster_png), width: w, height: h });
 
-    doc.videos.insert(v_hash.clone(), VideoData {
-        bytes: Arc::new(bytes),
-        width: w,
-        height: h,
-        duration_seconds: duration,
-    });
+    doc.videos.insert(v_hash.clone(), VideoData { bytes: Arc::new(bytes), width: w, height: h, duration_seconds: duration });
 
     Ok((v_hash, p_hash, w, h, duration))
 }
@@ -485,12 +468,7 @@ fn video_index<S: Serializer>(videos: &&BTreeMap<String, VideoData>, s: S) -> Re
         #[serde(rename = "durationSeconds")]
         duration_seconds: f64,
     }
-    s.collect_seq(videos.iter().map(|(hash, v)| Entry {
-        hash,
-        width: v.width,
-        height: v.height,
-        duration_seconds: v.duration_seconds,
-    }))
+    s.collect_seq(videos.iter().map(|(hash, v)| Entry { hash, width: v.width, height: v.height, duration_seconds: v.duration_seconds }))
 }
 
 /// Serialize the document (without images) to the JSON value stored in `document.json`.
@@ -882,10 +860,7 @@ pub(crate) struct VideoBudget {
     pub bytes: u64,
 }
 
-pub(crate) const VIDEO_BUDGET: VideoBudget = VideoBudget {
-    videos: 50,
-    bytes: 512 * 1024 * 1024,
-};
+pub(crate) const VIDEO_BUDGET: VideoBudget = VideoBudget { videos: 50, bytes: 512 * 1024 * 1024 };
 
 /// The archive's `videos/` members by hash, within `budget`, and the ones that couldn't be read
 /// with why.

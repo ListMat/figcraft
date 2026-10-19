@@ -2073,6 +2073,7 @@ impl<'d> Exporter<'d> {
                 event.push(("keyTrigger", o(vec![("keyCodes", arr(codes.into_iter().map(int).collect())), ("triggerDevice", device)])));
                 "ON_KEY_DOWN"
             }
+            Trigger::OnMediaEnd => "ON_MEDIA_HIT",
         };
         // A mouse trigger's delay is the event's timeout.
         if it.delay_secs() > 0.0 {
@@ -2120,6 +2121,10 @@ impl<'d> Exporter<'d> {
             Action::Back => plain("BACK"),
             Action::CloseOverlay => plain("CLOSE"),
             Action::OpenUrl { url } => Some(o(vec![("connectionType", e("URL")), ("connectionURL", s(url))])),
+            Action::PlayMedia { .. } | Action::PauseMedia { .. } | Action::ToggleMedia { .. } => {
+                self.warn("media playback actions were left out of .fig export");
+                None
+            }
             Action::SetVariable { .. } | Action::SetVariableMode { .. } | Action::Conditional { .. } => {
                 self.warn("variable and conditional prototype actions were left out");
                 None
@@ -2462,8 +2467,10 @@ fn layout_grid(g: &figcraft_doc::LayoutGrid, index: usize, bound: &Bound) -> Kv<
 
 fn export_setting(x: &figcraft_doc::ExportSetting) -> Kv<'static> {
     let format = match x.format {
-        // The format has no WebP export setting.
-        figcraft_doc::ExportFormat::Png | figcraft_doc::ExportFormat::Webp => "PNG",
+        // The format has no WebP or video export setting.
+        figcraft_doc::ExportFormat::Png | figcraft_doc::ExportFormat::Webp | figcraft_doc::ExportFormat::Mp4 | figcraft_doc::ExportFormat::Gif => {
+            "PNG"
+        }
         figcraft_doc::ExportFormat::Jpg => "JPEG",
         figcraft_doc::ExportFormat::Svg => "SVG",
         figcraft_doc::ExportFormat::Pdf => "PDF",

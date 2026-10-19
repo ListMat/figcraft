@@ -272,6 +272,8 @@ pub struct Presenter {
     textures: HashMap<NodeId, FrameTex>,
     arrived: f64,
     delays_fired: HashSet<(NodeId, usize)>,
+    media_ended_fired: HashSet<(NodeId, usize)>,
+    media_actions: Vec<(Action, NodeId)>,
     /// Mouse triggers waiting out their delay.
     waiting: Vec<Waiting>,
     hovered: Vec<NodeId>,
@@ -350,6 +352,8 @@ impl Presenter {
             textures: HashMap::new(),
             arrived: -1.0,
             delays_fired: HashSet::new(),
+            media_ended_fired: HashSet::new(),
+            media_actions: Vec::new(),
             waiting: Vec::new(),
             hovered: Vec::new(),
             press: None,
@@ -629,6 +633,7 @@ impl Presenter {
         }
         self.arrived = now;
         self.delays_fired.clear();
+        self.media_ended_fired.clear();
         self.waiting.clear();
         self.hovered.clear();
         self.rev += 1;
@@ -897,6 +902,10 @@ impl Presenter {
                     did |= self.perform_at(&inner, node, tr, dur, easing, rect, now, depth + 1);
                 }
                 did
+            }
+            Action::PlayMedia { .. } | Action::PauseMedia { .. } | Action::ToggleMedia { .. } => {
+                self.media_actions.push((a.clone(), node));
+                true
             }
         }
     }
@@ -1711,6 +1720,59 @@ fn finish(app: &mut FigApp, p: &mut Presenter) {
     }
     if let Some(e) = p.click_widgets(&app.session) {
         app.toast(e);
+    }
+    for (action, source_node) in std::mem::take(&mut p.media_actions) {
+        let target_node = match &action {
+            Action::PlayMedia { dest: Some(d) } | Action::PauseMedia { dest: Some(d) } | Action::ToggleMedia { dest: Some(d) } => *d,
+            _ => source_node,
+        };
+        if let Some(doc) = p.doc.as_ref()
+            && let Some(n) = doc.node(target_node)
+            && let Some(v_hash) = n.fills.iter().find_map(|f| match &f.kind {
+                figcraft_color::PaintKind::Image(img) => img.video.as_ref().map(|v| v.hash.clone()),
+                _ => None,
+            })
+        {
+            match action {
+                Action::PlayMedia { .. } => {
+                    app.session.video_playback.play(&v_hash);
+                }
+                Action::PauseMedia { .. } => {
+                    app.session.video_playback.pause(&v_hash);
+                }
+                Action::ToggleMedia { .. } => {
+                    if app.session.video_playback.is_playing(&v_hash) {
+                        app.session.video_playback.pause(&v_hash);
+                    } else {
+                        app.session.video_playback.play(&v_hash);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(doc) = p.doc.clone() {
+        let active_nodes = doc.subtree(p.current);
+        for id in active_nodes {
+            if let Some(n) = doc.node(id) {
+                let v_hash = n.fills.iter().find_map(|f| match &f.kind {
+                    figcraft_color::PaintKind::Image(img) => img.video.as_ref().map(|v| v.hash.clone()),
+                    _ => None,
+                });
+                if let Some(hash) = v_hash {
+                    let pts = app.session.video_playback.current_pts(&hash);
+                    let dur = app.session.video_playback.duration(&hash);
+                    let is_playing = app.session.video_playback.is_playing(&hash);
+                    if dur > 0.0 && pts >= dur && !is_playing {
+                        for (k, it) in n.interactions.iter().enumerate() {
+                            if matches!(it.trigger, Trigger::OnMediaEnd) && p.media_ended_fired.insert((id, k)) {
+                                p.fire(id, k, None, p.clock);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

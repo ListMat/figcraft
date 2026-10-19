@@ -255,3 +255,69 @@ fn the_interaction_editor_picks_a_controller_button() {
     let trigger = u.app.session.doc().unwrap().node(layer).unwrap().interactions[0].trigger.clone();
     assert_eq!(trigger, figcraft_doc::proto::Trigger::KeyPress { key: "Gamepad Menu".into() });
 }
+
+#[test]
+fn video_prototyping_actions_and_triggers_dispatch_playback() {
+    let mut s = Session::new();
+    let a = frame(&mut s, "A", 0.0);
+    let v_rect = id(&ex(&mut s, "shape.rectangle", json!({"x": 10, "y": 10, "width": 100, "height": 80, "parent": a})));
+    let hash = "video_test_hash_123".to_string();
+    let img_paint = figcraft_color::ImagePaint {
+        image: "poster_dummy".into(),
+        scale_mode: figcraft_color::ImageScaleMode::Fill,
+        rotation: 0,
+        scale: 1.0,
+        crop: None,
+        filters: Default::default(),
+        video: Some(figcraft_color::VideoRef::new(&hash)),
+    };
+    if let Some(n) = s.ds_mut().unwrap().doc_mut().node_mut(v_rect) {
+        n.fills = vec![figcraft_color::Paint {
+            kind: figcraft_color::PaintKind::Image(img_paint),
+            visible: true,
+            opacity: 1.0,
+            blend: figcraft_color::BlendMode::Normal,
+        }];
+    }
+
+    let btn_play = id(&ex(&mut s, "shape.rectangle", json!({"x": 10, "y": 100, "width": 40, "height": 30, "parent": a})));
+    ex(
+        &mut s,
+        "proto.interaction.add",
+        json!({"id": btn_play, "trigger": {"type": "onClick"}, "action": {"type": "playMedia", "dest": v_rect}, "transition": {"type": "instant"}}),
+    );
+
+    let btn_pause = id(&ex(&mut s, "shape.rectangle", json!({"x": 60, "y": 100, "width": 40, "height": 30, "parent": a})));
+    ex(
+        &mut s,
+        "proto.interaction.add",
+        json!({"id": btn_pause, "trigger": {"type": "onClick"}, "action": {"type": "pauseMedia", "dest": v_rect}, "transition": {"type": "instant"}}),
+    );
+
+    let btn_toggle = id(&ex(&mut s, "shape.rectangle", json!({"x": 110, "y": 100, "width": 40, "height": 30, "parent": a})));
+    ex(
+        &mut s,
+        "proto.interaction.add",
+        json!({"id": btn_toggle, "trigger": {"type": "onClick"}, "action": {"type": "toggleMedia", "dest": v_rect}, "transition": {"type": "instant"}}),
+    );
+
+    // Verify interaction data model
+    let doc = s.doc().unwrap();
+    assert_eq!(doc.node(btn_play).unwrap().interactions[0].actions[0], figcraft_doc::proto::Action::PlayMedia { dest: Some(v_rect) });
+    assert_eq!(doc.node(btn_pause).unwrap().interactions[0].actions[0], figcraft_doc::proto::Action::PauseMedia { dest: Some(v_rect) });
+    assert_eq!(doc.node(btn_toggle).unwrap().interactions[0].actions[0], figcraft_doc::proto::Action::ToggleMedia { dest: Some(v_rect) });
+
+    let mut u = Harness::new(s);
+    u.run("proto.present", json!({"start": a}));
+    u.frames(3, Vec::new);
+
+    // Click btn_play -> playMedia action executed
+    let r_play = on_screen(&u, btn_play);
+    click(&mut u, r_play.center());
+    assert!(u.app.ui.present.as_ref().unwrap().media_actions.is_empty());
+
+    // Click btn_toggle -> toggleMedia action executed
+    let r_toggle = on_screen(&u, btn_toggle);
+    click(&mut u, r_toggle.center());
+    assert!(u.app.ui.present.as_ref().unwrap().media_actions.is_empty());
+}

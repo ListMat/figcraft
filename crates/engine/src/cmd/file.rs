@@ -919,11 +919,84 @@ pub fn export_bytes_with(doc: &Document, ids: &[NodeId], setting: &ExportSetting
             let groups: Vec<Vec<NodeId>> = if all_frames { ids.iter().map(|i| vec![*i]).collect() } else { vec![drawn] };
             pdf_bytes(doc, &groups, &setting.print, (!own_area).then_some(area))
         }
+        ExportFormat::Mp4 | ExportFormat::Gif => export_temporal_bytes(doc, &drawn, area, setting, scale),
         _ => {
             let pix = figcraft_render::render_area(doc, &drawn, area, scale)
                 .ok_or_else(|| EngineError::Other("render failed (empty or too large)".into()))?;
             figcraft_render::encode_export(&pix, setting.format, doc.color_profile).map_err(EngineError::Other)
         }
+    }
+}
+
+/// Offline temporal rendering of `ids` over `area` into an animated GIF or MP4 video container.
+fn export_temporal_bytes(doc: &Document, ids: &[NodeId], area: figcraft_geom::Rect, setting: &ExportSetting, scale: f64) -> Result<Vec<u8>> {
+    let fps = if setting.fps > 0 { setting.fps.clamp(1, 60) } else { 30 };
+
+    let mut video_decoders: std::collections::HashMap<String, figcraft_format::VideoStreamDecoder> = std::collections::HashMap::new();
+    let mut auto_duration = 0.0f64;
+
+    for id in ids.iter().flat_map(|id| doc.subtree(*id)) {
+        if let Some(node) = doc.node(id) {
+            for p in &node.fills {
+                if let figcraft_color::PaintKind::Image(img) = &p.kind
+                    && let Some(v_ref) = &img.video
+                    && let Some(v_data) = doc.videos.get(&v_ref.hash)
+                {
+                    if v_data.duration_seconds > auto_duration {
+                        auto_duration = v_data.duration_seconds;
+                    }
+                    if !video_decoders.contains_key(&v_ref.hash)
+                        && let Ok(dec) = figcraft_format::VideoStreamDecoder::open(v_data.bytes.clone())
+                    {
+                        video_decoders.insert(v_ref.hash.clone(), dec);
+                    }
+                }
+            }
+        }
+    }
+
+    let duration = setting.duration.filter(|d| *d > 0.0).unwrap_or_else(|| if auto_duration > 0.0 { auto_duration.min(60.0) } else { 3.0 });
+
+    let total_frames = ((duration * f64::from(fps)).round() as usize).max(1);
+
+    let first_pix =
+        figcraft_render::render_area_at(doc, ids, area, scale, 0.0).ok_or_else(|| EngineError::Other("render failed (empty or too large)".into()))?;
+    let width = first_pix.width();
+    let height = first_pix.height();
+
+    struct ClearFrames;
+    impl Drop for ClearFrames {
+        fn drop(&mut self) {
+            figcraft_render::images::clear_all_video_frames();
+        }
+    }
+    let _guard = ClearFrames;
+
+    let frame_generator = |frame_idx: usize| -> std::result::Result<Vec<u8>, figcraft_format::FormatError> {
+        let t = (frame_idx as f64) / (f64::from(fps));
+
+        for (hash, dec) in &mut video_decoders {
+            if let Ok(Some(frame)) = dec.seek(t)
+                && let Some(size) = figcraft_render::IntSize::from_wh(frame.width, frame.height)
+                && let Some(pm) = figcraft_render::Pixmap::from_vec((*frame.rgba).clone(), size)
+            {
+                figcraft_render::images::set_video_frame(hash, std::sync::Arc::new(pm));
+            }
+        }
+
+        let pix = figcraft_render::render_area_at(doc, ids, area, scale, t)
+            .ok_or_else(|| figcraft_format::FormatError::Corrupt(format!("failed to render frame {frame_idx}")))?;
+        Ok(figcraft_render::to_rgba8(&pix))
+    };
+
+    match setting.format {
+        ExportFormat::Mp4 => {
+            figcraft_format::export_mp4(width, height, fps, total_frames, frame_generator).map_err(|e| EngineError::Other(e.to_string()))
+        }
+        ExportFormat::Gif => {
+            figcraft_format::export_gif(width, height, fps, total_frames, frame_generator).map_err(|e| EngineError::Other(e.to_string()))
+        }
+        _ => Err(EngineError::Other(format!("unsupported temporal format {:?}", setting.format))),
     }
 }
 
@@ -1007,7 +1080,23 @@ pub(super) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value) -> Resu
         e.suffix = s.chars().filter(|c| !c.is_control()).take(200).collect();
     }
     if let Some(f) = string(p, "format") {
-        e.format = ExportFormat::from_ext(&f).ok_or_else(|| bad(cmd, "format: png|jpg|svg|pdf|webp"))?;
+        e.format = ExportFormat::from_ext(&f).ok_or_else(|| bad(cmd, "format: png|jpg|svg|pdf|webp|mp4|gif"))?;
+    }
+    if let Some(fps) = num(p, "fps")
+        && (1.0..=120.0).contains(&fps)
+    {
+        e.fps = fps.round() as u32;
+    }
+    if let Some(val) = p.get("duration") {
+        if val.is_null() {
+            e.duration = None;
+        } else if let Some(dur) = val.as_f64() {
+            if dur > 0.0 && dur <= 600.0 {
+                e.duration = Some(dur);
+            } else if dur == 0.0 {
+                e.duration = None;
+            }
+        }
     }
     e.print = print_param(cmd, p, e.print)?;
     for (key, slot) in [
@@ -1253,7 +1342,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "mp4" | "m4v" => {
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            super::create::place_video(s, &json!({"data": b64, "x": x.unwrap_or(center.0), "y": y.unwrap_or(center.1), "name": file_stem(&name), "autoplay": true}))
+            super::create::place_video(
+                s,
+                &json!({"data": b64, "x": x.unwrap_or(center.0), "y": y.unwrap_or(center.1), "name": file_stem(&name), "autoplay": true}),
+            )
         }
         _ => {
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);

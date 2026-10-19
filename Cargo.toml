@@ -106,6 +106,9 @@ opt-level = 3
 [profile.dev.package.figcraft-render]
 opt-level = 3
 
+[profile.dev.package.figcraft-engine]
+opt-level = 3
+
 [profile.dev]
 opt-level = 1
 

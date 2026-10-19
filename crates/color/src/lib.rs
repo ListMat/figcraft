@@ -422,13 +422,7 @@ pub struct VideoRef {
 
 impl VideoRef {
     pub fn new(hash: impl Into<String>) -> Self {
-        Self {
-            hash: hash.into(),
-            loop_playback: true,
-            autoplay: true,
-            muted: false,
-            volume: 1.0,
-        }
+        Self { hash: hash.into(), loop_playback: true, autoplay: true, muted: false, volume: 1.0 }
     }
 }
 

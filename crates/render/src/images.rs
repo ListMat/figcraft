@@ -311,11 +311,11 @@ pub fn animation_clock(doc: &Document, root: NodeId, t: f64) -> Option<(u64, f64
                     let (i, next) = a.at(t);
                     let (key, soonest) = clock.unwrap_or((0, f64::INFINITY));
                     clock = Some((key.wrapping_mul(31).wrapping_add(i as u64 + 1), soonest.min(next)));
-                } else if let Some(v) = &img.video {
-                    if video_frame(&v.hash).is_some() {
-                        let (key, soonest) = clock.unwrap_or((0, f64::INFINITY));
-                        clock = Some((key.wrapping_mul(31).wrapping_add(1), soonest.min(0.016)));
-                    }
+                } else if let Some(v) = &img.video
+                    && video_frame(&v.hash).is_some()
+                {
+                    let (key, soonest) = clock.unwrap_or((0, f64::INFINITY));
+                    clock = Some((key.wrapping_mul(31).wrapping_add(1), soonest.min(0.016)));
                 }
             }
         }
@@ -395,16 +395,21 @@ pub fn padded(hash: &str, filters: &ImageFilters, profile: ColorProfile, pm: &Pi
     Some(out)
 }
 
-static VIDEO_FRAMES: OnceLock<Mutex<HashMap<String, Arc<Pixmap>>>> = OnceLock::new();
+type VideoFrameEntry = (Arc<Pixmap>, u64);
+type VideoFramesMap = Mutex<HashMap<String, VideoFrameEntry>>;
 
-fn video_frames() -> &'static Mutex<HashMap<String, Arc<Pixmap>>> {
+static VIDEO_FRAMES: OnceLock<VideoFramesMap> = OnceLock::new();
+static VIDEO_FRAME_REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn video_frames() -> &'static VideoFramesMap {
     VIDEO_FRAMES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Sets the current active decoded video frame for the given video hash.
 pub fn set_video_frame(hash: &str, pixmap: Arc<Pixmap>) {
+    let rev = VIDEO_FRAME_REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if let Ok(mut map) = video_frames().lock() {
-        map.insert(hash.to_string(), pixmap);
+        map.insert(hash.to_string(), (pixmap, rev));
     }
 }
 
@@ -424,5 +429,10 @@ pub fn clear_all_video_frames() {
 
 /// Retrieves the current active decoded video frame for the given video hash, if any.
 pub fn video_frame(hash: &str) -> Option<Arc<Pixmap>> {
-    video_frames().lock().ok()?.get(hash).cloned()
+    video_frames().lock().ok()?.get(hash).map(|(pm, _)| pm.clone())
+}
+
+/// Retrieves the revision counter of the active decoded video frame for the given video hash.
+pub fn video_frame_rev(hash: &str) -> Option<u64> {
+    video_frames().lock().ok()?.get(hash).map(|(_, rev)| *rev)
 }

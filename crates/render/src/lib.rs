@@ -286,6 +286,11 @@ pub fn render_area(doc: &Document, ids: &[NodeId], b: Rect, scale: f64) -> Optio
     area_at(doc, ids, b, scale, 0.0)
 }
 
+/// Rasterise `ids` (bottom to top) over page area `b` at `scale` and specific `time` (seconds).
+pub fn render_area_at(doc: &Document, ids: &[NodeId], b: Rect, scale: f64, time: f64) -> Option<Pixmap> {
+    area_at(doc, ids, b, scale, time)
+}
+
 fn area_at(doc: &Document, ids: &[NodeId], b: Rect, scale: f64, time: f64) -> Option<Pixmap> {
     let scale = if scale.is_finite() && scale > 0.0 { scale.min(64.0) } else { 1.0 };
     let w = (b.width() * scale - 1e-6).ceil().max(1.0);
@@ -400,7 +405,9 @@ pub fn encode_export(p: &Pixmap, format: ExportFormat, profile: ColorProfile) ->
         }
         ExportFormat::Jpg => jpeg_with(p, Color::WHITE, 90, icc),
         ExportFormat::Webp => webp_with(p, icc),
-        ExportFormat::Svg | ExportFormat::Pdf => Err(format!("{} is not a pixel format", format.label())),
+        ExportFormat::Svg | ExportFormat::Pdf | ExportFormat::Mp4 | ExportFormat::Gif => {
+            Err(format!("{} is not a static pixel format", format.label()))
+        }
     }
 }
 

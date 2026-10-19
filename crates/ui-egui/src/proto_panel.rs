@@ -40,7 +40,7 @@ pub fn editor(ctx: &egui::Context) -> Option<(NodeId, usize)> {
     ctx.data(|d| d.get_temp(editor_id()))
 }
 
-const TRIGGERS: [&str; 10] = [
+const TRIGGERS: [&str; 11] = [
     tr_noop("On click"),
     tr_noop("On drag"),
     tr_noop("While hovering"),
@@ -51,6 +51,7 @@ const TRIGGERS: [&str; 10] = [
     tr_noop("Mouse down"),
     tr_noop("Mouse up"),
     tr_noop("After delay"),
+    tr_noop("When video ends"),
 ];
 
 fn trigger_kind(t: &Trigger) -> &'static str {
@@ -65,6 +66,7 @@ fn trigger_kind(t: &Trigger) -> &'static str {
         Trigger::MouseDown => "Mouse down",
         Trigger::MouseUp => "Mouse up",
         Trigger::AfterDelay { .. } => "After delay",
+        Trigger::OnMediaEnd => "When video ends",
     }
 }
 
@@ -85,6 +87,7 @@ fn trigger_of(kind: &str, cur: &Trigger) -> Trigger {
             Trigger::AfterDelay { ms } => Trigger::AfterDelay { ms: *ms },
             _ => Trigger::AfterDelay { ms: 800 },
         },
+        "When video ends" => Trigger::OnMediaEnd,
         _ => Trigger::OnClick,
     }
 }
@@ -241,6 +244,9 @@ pub(crate) fn action_of(label: &str, doc: &Document, page: NodeId, node: NodeId,
                 actions: vec![],
             }],
         },
+        "Play video" => Action::PlayMedia { dest: None },
+        "Pause video" => Action::PauseMedia { dest: None },
+        "Toggle video" => Action::ToggleMedia { dest: None },
         _ => return None,
     })
 }
@@ -973,9 +979,42 @@ pub(crate) fn action_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, page:
                 });
             });
         }
+        Action::PlayMedia { dest } => {
+            let (dest, slot_clone) = (*dest, slot.clone());
+            let videos: Vec<NodeId> =
+                doc.top_level_frame(node).map(|f| doc.subtree(f).into_iter().filter(|&id| has_video_fill(doc, id)).collect()).unwrap_or_default();
+            if !videos.is_empty() {
+                dest_dropdown(app, ui, doc, &videos, dest.or(Some(node)), tr("Video"), move |d| Action::PlayMedia { dest: Some(d) }, &slot_clone);
+            }
+        }
+        Action::PauseMedia { dest } => {
+            let (dest, slot_clone) = (*dest, slot.clone());
+            let videos: Vec<NodeId> =
+                doc.top_level_frame(node).map(|f| doc.subtree(f).into_iter().filter(|&id| has_video_fill(doc, id)).collect()).unwrap_or_default();
+            if !videos.is_empty() {
+                dest_dropdown(app, ui, doc, &videos, dest.or(Some(node)), tr("Video"), move |d| Action::PauseMedia { dest: Some(d) }, &slot_clone);
+            }
+        }
+        Action::ToggleMedia { dest } => {
+            let (dest, slot_clone) = (*dest, slot.clone());
+            let videos: Vec<NodeId> =
+                doc.top_level_frame(node).map(|f| doc.subtree(f).into_iter().filter(|&id| has_video_fill(doc, id)).collect()).unwrap_or_default();
+            if !videos.is_empty() {
+                dest_dropdown(app, ui, doc, &videos, dest.or(Some(node)), tr("Video"), move |d| Action::ToggleMedia { dest: Some(d) }, &slot_clone);
+            }
+        }
         // Edited by `proto_editor`; Back and Close overlay have no settings.
         Action::SetVariable { .. } | Action::Conditional { .. } | Action::Back | Action::CloseOverlay => {}
     }
+}
+
+fn has_video_fill(doc: &Document, id: NodeId) -> bool {
+    doc.node(id).is_some_and(|n| {
+        n.fills.iter().any(|p| match &p.kind {
+            figcraft_color::PaintKind::Image(img) => img.video.is_some(),
+            _ => false,
+        })
+    })
 }
 
 fn animation_rows(app: &mut FigApp, ui: &mut Ui, node: NodeId, k: usize, it: &Interaction) {

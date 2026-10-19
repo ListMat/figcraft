@@ -68,8 +68,15 @@ fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Expo
         ui.spacing_mut().item_spacing.x = 4.0;
         let (size_w, format_w, button, gap) = (52.0, 54.0, 22.0, ui.spacing().item_spacing.x);
         let suffix_w = (ui.available_width() - size_w - format_w - button * 2.0 - gap * 4.0).max(32.0);
-        let presets: Vec<String> =
-            ExportSize::SCALES.iter().map(|value| ExportSize::Scale { value: *value }.label()).chain(["512w".into(), "512h".into()]).collect();
+        let presets: Vec<String> = if e.format.is_temporal() {
+            vec!["1x".into(), "2x".into(), "720h".into(), "1080h".into(), "1080w".into(), "1920w".into()]
+        } else {
+            ExportSize::SCALES
+                .iter()
+                .map(|value| ExportSize::Scale { value: *value }.label())
+                .chain(["512w".into(), "512h".into(), "1080w".into(), "1080h".into()])
+                .collect()
+        };
         if let Some(s) = widgets::combo_field(ui, Id::new(("export_size", i)), &e.size.label(), size_w, &presets)
             && ExportSize::parse(&s) != Some(e.size)
         {
@@ -95,7 +102,7 @@ fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Expo
             .width(216.0)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                if let Some(mut params) = advanced_options(ui, e) {
+                if let Some(mut params) = advanced_options(ui, i, e) {
                     params["ids"] = json!(ids);
                     params["index"] = json!(i);
                     app.run("export.update", params);
@@ -112,7 +119,7 @@ fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Expo
 
 /// A setting's advanced options: contents only and include bounding box, and for SVG outline
 /// text, the id attribute and simplified strokes. Returns the changed option as command params.
-fn advanced_options(ui: &mut Ui, e: &ExportSetting) -> Option<Value> {
+fn advanced_options(ui: &mut Ui, index: usize, e: &ExportSetting) -> Option<Value> {
     let mut out = None;
     let mut option = |ui: &mut Ui, key: &str, on: bool, label: &str| {
         if widgets::checkbox(ui, on, label) {
@@ -125,6 +132,50 @@ fn advanced_options(ui: &mut Ui, e: &ExportSetting) -> Option<Value> {
         option(ui, "svgOutlineText", e.svg_outline_text, tr("Outline text"));
         option(ui, "svgIdAttribute", e.svg_id_attribute, tr("Include id attribute"));
         option(ui, "svgSimplifyStroke", e.svg_simplify_stroke, tr("Simplify stroke"));
+    }
+    if e.format.is_temporal() {
+        let t = Tokens::get(ui.ctx());
+        ui.add_space(4.0);
+        widgets::separator(ui);
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            widgets::label(ui, tr("Preset"), t.text_secondary);
+            for (name, sz) in [("1080p", "1080h"), ("720p", "720h"), ("9:16", "1080w"), ("1:1", "1080w")] {
+                if ui.small_button(name).clicked() {
+                    out = Some(json!({ "size": sz }));
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            widgets::label(ui, tr("Frame rate"), t.text_secondary);
+            let w = (ui.available_width() - 4.0).max(64.0);
+            let fps_presets = vec!["15 fps".into(), "24 fps".into(), "30 fps".into(), "60 fps".into()];
+            let cur_fps = format!("{} fps", e.fps.max(1));
+            if let Some(s) = widgets::combo_field(ui, Id::new(("export_fps", index)), &cur_fps, w, &fps_presets) {
+                let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+                if let Ok(fps) = digits.parse::<u32>()
+                    && (1..=120).contains(&fps)
+                    && fps != e.fps
+                {
+                    out = Some(json!({ "fps": fps }));
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            widgets::label(ui, tr("Duration"), t.text_secondary);
+            let w = (ui.available_width() - 4.0).max(64.0);
+            if let Some(edit) = widgets::number_field_or(ui, Id::new(("export_duration", index)), e.duration, tr("Auto"), w, 0.5) {
+                let val = match edit {
+                    widgets::FieldEdit::Set(v) => v,
+                    widgets::FieldEdit::Scrub(v, _) => v,
+                };
+                if val <= 0.0 {
+                    out = Some(json!({ "duration": 0.0 }));
+                } else if (0.1..=600.0).contains(&val) {
+                    out = Some(json!({ "duration": val }));
+                }
+            }
+        });
     }
     out
 }

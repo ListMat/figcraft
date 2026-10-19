@@ -34,7 +34,7 @@ and prototype interactions are still unchecked there.
 | HEIC | yes | **no** | shortcut: no Rust decoder; the usable ones (libheif, libde265) are C libraries, and HEVC carries patents. Revisit when a Rust decoder exists | 2–3 |
 | TIFF | Safari only | **yes** | open, import, place, drop (the `image` crate's TIFF decoder; its embedded ICC profile is honoured); SVG exports embed it (and BMP) as PNG, which SVG viewers show | — |
 | BMP | — | yes | | — |
-| MP4, MOV, WebM (video fills, paid plans) | yes | **no** | shortcut: decoding H.264/HEVC/VP9 needs non-Rust libraries (FFmpeg or each platform's media framework); presenter playback would reuse the animated GIF clock | 4–8 |
+| MP4, MOV, WebM (video fills, paid plans) | yes | **yes (MP4)** | native pure-Rust MP4/H.264 video fills, canvas playback and offline temporal export (`rusty_h264`, `mp4`) | — |
 | Images over 4096 px | downscaled to 4096 | kept | | — |
 | Pasted content from other apps | images, SVG, text, Figma clipboard | images, SVG, text (newest clipboard content wins) | no Figma clipboard (it carries Figma's own binary) | with `.fig` |
 
@@ -54,6 +54,8 @@ export limit, not a native document nesting limit.
 | SVG | yes (outline text option, ids) | yes | alpha/luminance masks kept; noise, texture, progressive and background blur, glass embedded as images; outline text (off: `<text>` with one `<tspan>` per line, one style per layer), unique id attributes from layer names, explicit depth-limit refusal, simplified strokes (stroke attributes for centred strokes and for inside and outside strokes on boxes and ellipses) | — |
 | PDF | yes | yes | one page per frame, real selectable text in subset fonts, links, vectors and gradients as vectors, effects as images; bleed, crop/bleed marks, page boxes, naive CMYK; checked by rendering the PDF back against PNG exports; explicit depth-limit refusal | CMYK output intent 2–4 |
 | WebP | — | yes (ours) | | — |
+| MP4 | yes (video/prototypes) | yes | pure-Rust offline temporal export (H.264 Baseline, AVCC muxed via `mp4::Mp4Writer`, deterministic time sampling, auto/manual duration, FPS presets) | — |
+| GIF | yes | yes | animated looping GIF export (delay computed from FPS, auto/manual duration) | — |
 | Copy as CSS / SVG / PNG / text / link | yes | yes | Copy as PNG: the whole selection at 2x | — |
 | Dev Mode code (CSS, iOS SwiftUI, Android Compose) | yes | yes, plus HTML and React | see [dev-mode-parity](dev-mode-parity.md) | — |
 | `.fig` ("Save local copy") | yes | **experimental** | the whole file; see [Export to `.fig`](#export-to-fig-experimental). Round trips through our own importer; written files checked by opening them in other software: layers, fills, gradients, strokes, shadows, vectors, components and text draw as in FigCraft; resized and scaled instances keep their size and lay their layers out for it, variables with their modes and colour bindings resolve there (a frame set to another mode shows that mode's colours, also inside instances), colour, text, effect and grid styles are listed, and variable-width strokes that are the same on both sides of the path draw with their width | 5–15 (non-colour bindings as bindings, checks of effects, images and prototypes, and against real files) |

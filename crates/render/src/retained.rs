@@ -52,6 +52,7 @@ struct Frame {
     /// The view's top-left in device pixels (page origin × scale).
     px: (i64, i64),
     fonts: u64,
+    video_revs: std::collections::HashMap<String, u64>,
     /// Areas (page coordinates) of layers whose look depends on where a render cuts them, and the
     /// largest background blur (what backdrops read around).
     sensitive: Arc<Sensitive>,
@@ -193,6 +194,17 @@ impl Retained {
         sensitive: Arc<Sensitive>,
     ) -> &Frame {
         let (view, px, fonts) = at;
+        let mut video_revs = std::collections::HashMap::new();
+        for n in doc.subtree(page).into_iter().filter_map(|id| doc.node(id)) {
+            for p in n.fills.iter().chain(&n.strokes) {
+                if let figcraft_color::PaintKind::Image(img) = &p.kind
+                    && let Some(v) = &img.video
+                    && let Some(rev) = crate::images::video_frame_rev(&v.hash)
+                {
+                    video_revs.insert(v.hash.clone(), rev);
+                }
+            }
+        }
         self.last.insert(Frame {
             doc: doc.clone(),
             page,
@@ -206,6 +218,7 @@ impl Retained {
             scale: view.scale.to_bits(),
             px,
             fonts,
+            video_revs,
             sensitive,
             pix,
         })
@@ -303,19 +316,19 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
             }
         }
     }
-    // Active video layers on this page need repainting as new frames arrive:
+    // Active video layers on this page need repainting ONLY as new frames arrive:
     for n in doc.subtree(page).into_iter().filter_map(|id| doc.node(id)).filter(|n| n.visible) {
         for p in n.fills.iter().chain(&n.strokes).filter(|p| p.visible) {
-            if let figcraft_color::PaintKind::Image(img) = &p.kind {
-                if let Some(v) = &img.video {
-                    if crate::images::video_frame(&v.hash).is_some() {
-                        let mut areas = Vec::new();
-                        let _ = changed_areas(doc, page, n.id, &mut areas);
-                        for r in areas {
-                            if let Some(p) = to_px(r, view.scale, px) {
-                                damage.push(Px { x0: p.x0 - reach, y0: p.y0 - reach, x1: p.x1 + reach, y1: p.y1 + reach });
-                            }
-                        }
+            if let figcraft_color::PaintKind::Image(img) = &p.kind
+                && let Some(v) = &img.video
+                && let Some(rev) = crate::images::video_frame_rev(&v.hash)
+                && last.video_revs.get(&v.hash).copied() != Some(rev)
+            {
+                let mut areas = Vec::new();
+                let _ = changed_areas(doc, page, n.id, &mut areas);
+                for r in areas {
+                    if let Some(p) = to_px(r, view.scale, px) {
+                        damage.push(Px { x0: p.x0 - reach, y0: p.y0 - reach, x1: p.x1 + reach, y1: p.y1 + reach });
                     }
                 }
             }

@@ -631,11 +631,16 @@ fn video_place_creates_node_with_video_paint_and_supports_undo_redo() {
     if !video_path.exists() {
         return;
     }
-    let r = s.execute("video.place", &json!({
-        "path": video_path.to_str().unwrap(),
-        "x": 50,
-        "y": 100,
-    })).unwrap();
+    let r = s
+        .execute(
+            "video.place",
+            &json!({
+                "path": video_path.to_str().unwrap(),
+                "x": 50,
+                "y": 100,
+            }),
+        )
+        .unwrap();
     let vid = id(&r);
     assert_eq!(s.selection(), vec![vid]);
     let doc = s.doc().unwrap();
@@ -664,12 +669,17 @@ fn video_playback_commands_play_pause_seek_and_stream() {
     if !video_path.exists() {
         return;
     }
-    let r = s.execute("video.place", &json!({
-        "path": video_path.to_str().unwrap(),
-        "x": 0,
-        "y": 0,
-        "autoplay": false,
-    })).unwrap();
+    let r = s
+        .execute(
+            "video.place",
+            &json!({
+                "path": video_path.to_str().unwrap(),
+                "x": 0,
+                "y": 0,
+                "autoplay": false,
+            }),
+        )
+        .unwrap();
     let vid = id(&r);
 
     // Initial state: not playing
@@ -700,7 +710,7 @@ fn video_playback_commands_play_pause_seek_and_stream() {
     let pause_res = s.execute("video.pause", &json!({"id": vid})).unwrap();
     assert_eq!(pause_res["playing"], false);
     let pts_paused = pause_res["pts"].as_f64().unwrap();
-    assert!(pts_paused >= 3.4 && pts_paused <= 3.6);
+    assert!((3.4..=3.6).contains(&pts_paused));
 
     // Toggle video (should resume playback)
     let toggle_res = s.execute("video.toggle", &json!({"id": vid})).unwrap();
@@ -719,11 +729,16 @@ fn video_playback_render_canvas_sync() {
     if !video_path.exists() {
         return;
     }
-    let r = s.execute("video.place", &json!({
-        "path": video_path.to_str().unwrap(),
-        "x": 0,
-        "y": 0,
-    })).unwrap();
+    let r = s
+        .execute(
+            "video.place",
+            &json!({
+                "path": video_path.to_str().unwrap(),
+                "x": 0,
+                "y": 0,
+            }),
+        )
+        .unwrap();
     let vid = id(&r);
 
     // Initial render without active playback: uses poster frame
@@ -750,4 +765,3 @@ fn video_playback_render_canvas_sync() {
     // Pause
     s.execute("video.pause", &json!({"id": vid})).unwrap();
 }
-

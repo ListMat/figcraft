@@ -330,3 +330,46 @@ fn copy_as_png_svg_and_code() {
     let css = crate::codegen::code_for(doc, a, crate::codegen::CodeLang::Css);
     assert!(css.contains("background: #FF0000;"), "Copy as CSS is the layer's CSS from Inspect");
 }
+
+#[test]
+fn export_as_mp4_and_gif() {
+    let mut s = Session::new();
+    let r = rect(&mut s, 0.0, 0.0, 64.0, 64.0, "#00FF00", None);
+
+    // Export as MP4
+    let res_mp4 = ex(
+        &mut s,
+        "file.export",
+        json!({
+            "ids": [r],
+            "format": "mp4",
+            "duration": 0.2,
+            "fps": 10
+        }),
+    );
+    assert_eq!(res_mp4["format"], "mp4");
+    let b64_mp4 = res_mp4["data"].as_str().unwrap();
+    let bytes_mp4 = base64::engine::general_purpose::STANDARD.decode(b64_mp4).unwrap();
+    assert!(!bytes_mp4.is_empty());
+    // MP4 begins with ftyp box at offset 4
+    assert!(bytes_mp4.len() > 8);
+    assert_eq!(&bytes_mp4[4..8], b"ftyp");
+
+    // Export as GIF
+    let res_gif = ex(
+        &mut s,
+        "file.export",
+        json!({
+            "ids": [r],
+            "format": "gif",
+            "duration": 0.2,
+            "fps": 10
+        }),
+    );
+    assert_eq!(res_gif["format"], "gif");
+    let b64_gif = res_gif["data"].as_str().unwrap();
+    let bytes_gif = base64::engine::general_purpose::STANDARD.decode(b64_gif).unwrap();
+    assert!(!bytes_gif.is_empty());
+    // GIF magic header
+    assert!(bytes_gif.starts_with(b"GIF89a") || bytes_gif.starts_with(b"GIF87a"));
+}

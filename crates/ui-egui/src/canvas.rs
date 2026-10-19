@@ -1505,6 +1505,13 @@ pub fn fmt(v: f64) -> String {
     if (r - r.round()).abs() < 1e-9 { format!("{}", r.round() as i64) } else { format!("{r}") }
 }
 
+fn format_media_time(seconds: f64) -> String {
+    let s = seconds.max(0.0).round() as u64;
+    let m = s / 60;
+    let rem_s = s % 60;
+    format!("{:02}:{:02}", m, rem_s)
+}
+
 fn video_controls(app: &mut FigApp, ctx: &egui::Context) {
     let Ok(ds) = app.session.ds() else { return };
     if ds.selection.len() != 1 {
@@ -1515,7 +1522,9 @@ fn video_controls(app: &mut FigApp, ctx: &egui::Context) {
     let Some(v_hash) = node.fills.iter().find_map(|p| match &p.kind {
         figcraft_color::PaintKind::Image(img) => img.video.as_ref().map(|v| v.hash.clone()),
         _ => None,
-    }) else { return };
+    }) else {
+        return;
+    };
 
     let Some(q) = node_quad(app, &ds.doc, sel_id) else { return };
     let bottom_y = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
@@ -1530,34 +1539,67 @@ fn video_controls(app: &mut FigApp, ctx: &egui::Context) {
     let pts = app.session.video_playback.current_pts(&v_hash);
     let dur = app.session.video_playback.duration(&v_hash);
 
-    let time_str = if dur > 0.0 {
-        format!("{:.1}s / {:.1}s", pts, dur)
-    } else {
-        format!("{:.1}s", pts)
-    };
+    let time_str = if dur > 0.0 { format!("{} / {}", format_media_time(pts), format_media_time(dur)) } else { format_media_time(pts) };
 
-    egui::Area::new(Id::new(("video_floating_bar", sel_id)))
-        .order(egui::Order::Foreground)
-        .pivot(Align2::CENTER_TOP)
-        .fixed_pos(pill_pos)
-        .show(ctx, |ui| {
+    egui::Area::new(Id::new(("video_floating_bar", sel_id))).order(egui::Order::Foreground).pivot(Align2::CENTER_TOP).fixed_pos(pill_pos).show(
+        ctx,
+        |ui| {
             egui::Frame::NONE
-                .fill(Color32::from_black_alpha(220))
+                .fill(Color32::from_black_alpha(225))
                 .corner_radius(CornerRadius::same(14))
-                .stroke(Stroke::new(1.0, Color32::from_white_alpha(50)))
-                .inner_margin(egui::Margin::symmetric(10, 4))
+                .stroke(Stroke::new(1.0, Color32::from_white_alpha(45)))
+                .inner_margin(egui::Margin::symmetric(10, 5))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
+
+                        // Rewind / restart button
+                        if crate::icons::button(ui, crate::icons::Icon::Reset, 18.0, false, tr("Rewind to start")).clicked() {
+                            app.session.video_playback.seek(&v_hash, 0.0);
+                        }
+
+                        // Play / Pause button
                         let icon = if is_playing { crate::icons::Icon::Pause } else { crate::icons::Icon::Play };
                         let tip = if is_playing { tr("Pause") } else { tr("Play") };
                         if crate::icons::button(ui, icon, 18.0, false, tip).clicked() {
                             app.session.video_playback.toggle(&v_hash);
                         }
+
+                        // Scrubber track
+                        if dur > 0.0 {
+                            let track_w = 90.0f32;
+                            let (track_rect, track_resp) = ui.allocate_exact_size(vec2(track_w, 14.0), Sense::click_and_drag());
+                            let frac = (pts / dur).clamp(0.0, 1.0) as f32;
+                            let track_y = track_rect.center().y;
+                            let bar_bg = Color32::from_white_alpha(45);
+                            let bar_fill = ACCENT;
+
+                            // Background track
+                            ui.painter().line_segment([pos2(track_rect.min.x, track_y), pos2(track_rect.max.x, track_y)], Stroke::new(3.0, bar_bg));
+
+                            // Progress fill
+                            let fill_x = track_rect.min.x + track_w * frac;
+                            if frac > 0.001 {
+                                ui.painter().line_segment([pos2(track_rect.min.x, track_y), pos2(fill_x, track_y)], Stroke::new(3.0, bar_fill));
+                            }
+
+                            // Thumb knob
+                            ui.painter().circle_filled(pos2(fill_x, track_y), 4.5, Color32::WHITE);
+
+                            // Interactive seek on scrub
+                            if (track_resp.clicked() || track_resp.dragged())
+                                && let Some(pointer) = track_resp.interact_pointer_pos()
+                            {
+                                let rel = ((pointer.x - track_rect.min.x) / track_w).clamp(0.0, 1.0) as f64;
+                                app.session.video_playback.seek(&v_hash, rel * dur);
+                            }
+                        }
+
                         ui.label(egui::RichText::new(time_str).font(semibold(11.0)).color(Color32::WHITE));
                     });
                 });
-        });
+        },
+    );
 }
 
 #[cfg(test)]

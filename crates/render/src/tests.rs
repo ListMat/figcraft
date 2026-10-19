@@ -277,6 +277,8 @@ fn exports_carry_the_colour_profile() {
             assert!(!encode_export(&pix, f, profile).unwrap().is_empty());
         }
         assert!(encode_export(&pix, ExportFormat::Svg, profile).is_err());
+        assert!(encode_export(&pix, ExportFormat::Mp4, profile).is_err());
+        assert!(encode_export(&pix, ExportFormat::Gif, profile).is_err());
     }
     assert_eq!(png_insert_chunk(b"not a png".to_vec(), b"sRGB", &[0]), b"not a png");
 }
