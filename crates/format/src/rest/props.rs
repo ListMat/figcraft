@@ -133,7 +133,7 @@ fn paint(cx: &mut Ctx, p: &Value) -> Option<Paint> {
         "GRADIENT_RADIAL" => PaintKind::Gradient(gradient(GradientKind::Radial, p)),
         "GRADIENT_ANGULAR" => PaintKind::Gradient(gradient(GradientKind::Angular, p)),
         "GRADIENT_DIAMOND" => PaintKind::Gradient(gradient(GradientKind::Diamond, p)),
-        "IMAGE" => PaintKind::Image(image(cx, p)),
+        "IMAGE" | "VIDEO" => PaintKind::Image(image(cx, p)),
         other => {
             cx.warn(format!("{} paints are not supported and were skipped", clip_str(other)));
             return None;
@@ -178,6 +178,7 @@ fn image(cx: &mut Ctx, p: &Value) -> ImagePaint {
         .filter(|c| c[0].abs() > 1e-9 && c[3].abs() > 1e-9);
     let f = p.get("filters");
     let filter = |k: &str| f.and_then(|f| num(f, k)).unwrap_or(0.0).clamp(-1.0, 1.0) as f32;
+    let video = text(p, "videoRef").and_then(|r| cx.video_key(r)).map(figcraft_doc::color::VideoRef::new);
     ImagePaint {
         image: cx.image_key(text(p, "imageRef").unwrap_or("")),
         scale_mode,
@@ -193,7 +194,7 @@ fn image(cx: &mut Ctx, p: &Value) -> ImagePaint {
             highlights: filter("highlights"),
             shadows: filter("shadows"),
         },
-        video: None,
+        video,
     }
 }
 

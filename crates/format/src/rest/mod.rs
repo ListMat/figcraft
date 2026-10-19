@@ -309,6 +309,7 @@ pub(crate) struct Ctx<'a> {
     /// Imported variables by id, and the mode ids of imported collections (default first).
     var_kinds: BTreeMap<String, VariableType>,
     var_modes: BTreeMap<String, Vec<String>>,
+    video_keys: BTreeMap<String, String>,
 }
 
 impl<'a> Ctx<'a> {
@@ -317,6 +318,7 @@ impl<'a> Ctx<'a> {
             doc,
             images,
             image_keys: BTreeMap::new(),
+            video_keys: BTreeMap::new(),
             missing_images: 0,
             warnings: Warnings::default(),
             count: 0,
@@ -797,6 +799,25 @@ impl<'a> Ctx<'a> {
         };
         self.image_keys.insert(image_ref.to_string(), key.clone());
         key
+    }
+
+    pub(crate) fn video_key(&mut self, video_ref: &str) -> Option<String> {
+        if video_ref.is_empty() {
+            return None;
+        }
+        if let Some(k) = self.video_keys.get(video_ref) {
+            return Some(k.clone());
+        }
+        let resolved = (self.images)(video_ref);
+        let key = match resolved.and_then(|b| crate::add_video(&mut self.doc, b).ok()) {
+            Some((v_hash, poster_hash, _, _, _)) => {
+                self.image_keys.entry(video_ref.to_string()).or_insert(poster_hash);
+                v_hash
+            }
+            None => video_ref.to_string(),
+        };
+        self.video_keys.insert(video_ref.to_string(), key.clone());
+        Some(key)
     }
 
     fn is_component(&self, id: NodeId) -> bool {

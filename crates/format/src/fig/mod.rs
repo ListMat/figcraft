@@ -116,14 +116,16 @@ impl<'b> Archive<'b> {
         Ok(Archive { canvas, file_name, zip: Some(z) })
     }
 
-    /// Bytes of image `hash` (lowercase hex) from `images/`.
+    /// Bytes of image or video `hash` (lowercase hex) from `images/` or `videos/`.
     fn image(&self, hash: &str) -> Option<Vec<u8>> {
         if hash.is_empty() || hash.len() > 128 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
         }
         // A clone shares the parsed directory and the bytes; the resolver only has shared access.
         let mut z = self.zip.clone()?;
-        crate::read_member(&mut z, &format!("images/{hash}"), MAX_IMAGE).ok()
+        crate::read_member(&mut z, &format!("images/{hash}"), MAX_IMAGE)
+            .or_else(|_| crate::read_member(&mut z, &format!("videos/{hash}"), MAX_IMAGE))
+            .ok()
     }
 }
 

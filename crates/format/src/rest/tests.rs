@@ -208,6 +208,20 @@ fn image_bytes_come_from_the_resolver() {
 }
 
 #[test]
+fn video_paint_imports_with_video_ref() {
+    let v = file(json!([page(
+        "P",
+        json!([{"id": "1", "name": "V", "type": "RECTANGLE", "size": {"x": 100, "y": 80}, "relativeTransform": at(0.0, 0.0),
+        "fills": [{"type": "VIDEO", "imageRef": "poster1", "videoRef": "vid123", "scaleMode": "FILL"}]}])
+    )]));
+    let (doc, warnings) = import(&v, &no_images).unwrap();
+    let PaintKind::Image(img) = &named(&doc, "V").fills[0].kind else { panic!() };
+    assert_eq!(img.scale_mode, ImageScaleMode::Fill);
+    assert_eq!(img.video.as_ref().map(|v| v.hash.as_str()), Some("vid123"));
+    assert!(warnings.iter().all(|w| !w.contains("VIDEO")), "{warnings:?}");
+}
+
+#[test]
 fn strokes_and_effects() {
     let (doc, warnings) = one(json!([
         {"id": "1", "name": "S", "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10},

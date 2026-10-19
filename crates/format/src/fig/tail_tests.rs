@@ -207,6 +207,19 @@ fn tail_message() -> Kv<'static> {
             ],
         ),
         node(
+            38,
+            Some((1, "*")),
+            "CONNECTOR",
+            "LabeledLink",
+            vec![
+                stroke(),
+                ("strokeWeight", f(2.0)),
+                ("connectorStart", o(vec![("position", xy(0.0, 100.0))])),
+                ("connectorEnd", o(vec![("position", xy(200.0, 100.0))])),
+                ("textData", text_data("Next Step")),
+            ],
+        ),
+        node(
             37,
             Some((1, "(")),
             "TABLE",
@@ -290,6 +303,13 @@ fn other_layer_kinds_import_as_the_closest_layers() {
         network_of(&doc, "Link").vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
     assert_eq!(ends, [(0.0, 300.0), (450.0, 50.0)]);
     assert_eq!(link.stroke.cap_end, StrokeCap::TriangleArrow);
+    // A connector with text: a frame with its vector line and its text label.
+    let labeled = named(&doc, "LabeledLink");
+    assert!(matches!(labeled.kind, NodeKind::Frame));
+    assert_eq!(labeled.children.len(), 2);
+    let labeled_kids: Vec<&figcraft_doc::Node> = labeled.children.iter().map(|c| doc.node(*c).unwrap()).collect();
+    assert!(matches!(labeled_kids[0].kind, NodeKind::Vector { .. }));
+    assert_eq!(text_of(labeled.children[1]), "Next Step");
     // A table: a frame.
     assert!(matches!(named(&doc, "Grid").kind, NodeKind::Frame));
     for w in ["sticky layers import as frames", "shape with text layers", "connector layers import as vectors", "table layers", "elbowed"] {

@@ -442,7 +442,8 @@ impl<'a> Mapper<'a> {
             _ => id.to_string(),
         };
         let own = view.str("type").unwrap_or("");
-        let stand = stand_in(own);
+        let has_connector_text = own == "CONNECTOR" && own_text(&view).is_some();
+        let stand = if has_connector_text { Some(("FRAME", "frames with their text")) } else { stand_in(own) };
         let ty = match own {
             "ROUNDED_RECTANGLE" => "RECTANGLE",
             "SYMBOL" => "COMPONENT",
@@ -477,7 +478,7 @@ impl<'a> Mapper<'a> {
             }
             _ => {}
         }
-        if own == "CONNECTOR" {
+        if own == "CONNECTOR" && !has_connector_text {
             self.connector(&mut o, &view, space);
         }
         if ty == "COMPONENT" || ty == "COMPONENT_SET" {
@@ -506,7 +507,15 @@ impl<'a> Mapper<'a> {
                 kids.extend(self.layer(&c, inst, child_space, Some(&view), fit, depth + 1));
             }
         }
-        if stand.is_some_and(|s| s.0 == "FRAME") {
+        if has_connector_text {
+            let (line, text_node) = self.connector_with_text(&mut o, &view, space, &rest_id);
+            if let Some(l) = line {
+                kids.push(l);
+            }
+            if let Some(t) = text_node {
+                kids.push(t);
+            }
+        } else if stand.is_some_and(|s| s.0 == "FRAME") {
             kids.splice(0..0, self.shape_with_text(&mut o, &view, own, &rest_id));
             kids.extend(self.inner_text(&o, &view, &rest_id, own == "STICKY"));
         }
@@ -576,20 +585,7 @@ impl<'a> Mapper<'a> {
         Some(Value::Object(t))
     }
 
-    /// A connector's end caps, and when it has no saved outline or network a straight line
-    /// between its ends: free points, or a point (the centre unless given) of a sibling layer.
-    fn connector(&mut self, o: &mut Obj, v: &View<'a>, space: Affine) {
-        for (from, to) in [("connectorStartCap", "strokeCapStart"), ("connectorEndCap", "strokeCapEnd")] {
-            if let Some(c) = v.str(from) {
-                o.insert(to.into(), json!(cap_name(c)));
-            }
-        }
-        if own_text(v).is_some() {
-            self.warn("connector labels were skipped");
-        }
-        if ["vectorNetwork", "fillGeometry", "strokeGeometry"].iter().any(|k| o.contains_key(*k)) {
-            return;
-        }
+    fn connector_endpoints(&self, v: &View<'a>) -> Option<(Point, Point)> {
         let parent = v.get("parentIndex").and_then(|p| p.get("guid")).and_then(guid);
         let end = |k: &str| -> Option<Point> {
             let e = v.get(k)?;
@@ -608,7 +604,21 @@ impl<'a> Mapper<'a> {
             };
             (p.x.is_finite() && p.y.is_finite()).then_some(p)
         };
-        let (Some(a), Some(b)) = (end("connectorStart"), end("connectorEnd")) else {
+        Some((end("connectorStart")?, end("connectorEnd")?))
+    }
+
+    /// A connector's end caps, and when it has no saved outline or network a straight line
+    /// between its ends: free points, or a point (the centre unless given) of a sibling layer.
+    fn connector(&mut self, o: &mut Obj, v: &View<'a>, space: Affine) {
+        for (from, to) in [("connectorStartCap", "strokeCapStart"), ("connectorEndCap", "strokeCapEnd")] {
+            if let Some(c) = v.str(from) {
+                o.insert(to.into(), json!(cap_name(c)));
+            }
+        }
+        if ["vectorNetwork", "fillGeometry", "strokeGeometry"].iter().any(|k| o.contains_key(*k)) {
+            return;
+        }
+        let Some((a, b)) = self.connector_endpoints(v) else {
             self.warn("connectors whose ends can't be placed are empty");
             return;
         };
@@ -622,6 +632,77 @@ impl<'a> Mapper<'a> {
             "vectorNetwork".into(),
             json!({"vertices": [{"x": a.x - x0, "y": a.y - y0}, {"x": b.x - x0, "y": b.y - y0}], "segments": [{"a": 0, "b": 1}]}),
         );
+    }
+
+    /// A connector with text, imported as a frame with its vector line and its text label.
+    fn connector_with_text(&mut self, o: &mut Obj, v: &View<'a>, space: Affine, rest_id: &str) -> (Option<Value>, Option<Value>) {
+        if self.count >= MAX_NODES {
+            return (None, None);
+        }
+        let Some((a, b)) = self.connector_endpoints(v) else {
+            self.warn("connectors whose ends can't be placed are empty");
+            return (None, None);
+        };
+        if v.str("connectorLineStyle").is_some_and(|s| s != "STRAIGHT") {
+            self.warn("elbowed and curved connectors without a saved path import as straight lines");
+        }
+        let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
+        let w = (a.x - b.x).abs();
+        let h = (a.y - b.y).abs();
+        o.insert("relativeTransform".into(), rows(space * Affine::translate((x0, y0))));
+        o.insert("size".into(), json!({"x": w.max(1.0), "y": h.max(1.0)}));
+        o.insert("fills".into(), json!([]));
+        let strokes = o.insert("strokes".into(), json!([])).unwrap_or_else(|| json!([]));
+
+        // Line vector child
+        let mut line = Obj::new();
+        line.insert("id".into(), json!(format!("{rest_id};line")));
+        line.insert("type".into(), json!("VECTOR"));
+        line.insert("name".into(), json!("line"));
+        line.insert("relativeTransform".into(), rows(Affine::IDENTITY));
+        line.insert("size".into(), json!({"x": w, "y": h}));
+        line.insert("strokes".into(), strokes);
+        for k in ["strokeWeight", "strokeAlign", "strokeJoin", "strokeDashes"] {
+            if let Some(x) = o.get(k) {
+                line.insert(k.into(), x.clone());
+            }
+        }
+        for (from, to) in [("connectorStartCap", "strokeCapStart"), ("connectorEndCap", "strokeCapEnd")] {
+            if let Some(c) = v.str(from) {
+                line.insert(to.into(), json!(cap_name(c)));
+            }
+        }
+        line.insert(
+            "vectorNetwork".into(),
+            json!({"vertices": [{"x": a.x - x0, "y": a.y - y0}, {"x": b.x - x0, "y": b.y - y0}], "segments": [{"a": 0, "b": 1}]}),
+        );
+        self.count += 1;
+
+        // Label text child
+        let text_node = if let Some(chars) = own_text(v) {
+            let mid_x = (a.x + b.x) / 2.0 - x0;
+            let mid_y = (a.y + b.y) / 2.0 - y0;
+            let tw = 120.0f64.max(w);
+            let th = 28.0f64.max(h);
+            let mut t = Obj::new();
+            t.insert("id".into(), json!(format!("{rest_id};text")));
+            t.insert("type".into(), json!("TEXT"));
+            t.insert("name".into(), json!(chars.chars().take(40).collect::<String>()));
+            t.insert("size".into(), json!({"x": tw, "y": th}));
+            t.insert("relativeTransform".into(), rows(Affine::translate((mid_x - tw / 2.0, mid_y - th / 2.0))));
+            self.text(&mut t, v);
+            if let Some(Value::Object(st)) = t.get_mut("style") {
+                st.entry("textAlignHorizontal").or_insert_with(|| json!("CENTER"));
+                st.entry("textAlignVertical").or_insert_with(|| json!("CENTER"));
+                st.insert("textAutoResize".into(), json!("WIDTH_AND_HEIGHT"));
+            }
+            self.count += 1;
+            Some(Value::Object(t))
+        } else {
+            None
+        };
+
+        (Some(Value::Object(line)), text_node)
     }
 
     /// Fields every layer type shares.
@@ -1627,10 +1708,14 @@ fn paint(p: &Kv) -> Option<Value> {
                 .collect();
             o.insert("gradientStops".into(), Value::Array(stops));
         }
-        "IMAGE" => {
+        "IMAGE" | "VIDEO" => {
             let hash: String =
                 p.get("image").and_then(|i| i.get("hash")).and_then(Kv::bytes).unwrap_or_default().iter().map(|b| format!("{b:02x}")).collect();
             o.insert("imageRef".into(), json!(hash));
+            if let Some(v_hash) = p.get("video").and_then(|i| i.get("hash")).and_then(Kv::bytes) {
+                let v_hex: String = v_hash.iter().map(|b| format!("{b:02x}")).collect();
+                o.insert("videoRef".into(), json!(v_hex));
+            }
             let mode = p.get("imageScaleMode").and_then(Kv::str).unwrap_or("FILL");
             o.insert("scaleMode".into(), json!(mode));
             if let (Some(t), "STRETCH") = (t, mode) {
