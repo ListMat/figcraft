@@ -622,16 +622,14 @@ impl<'a> Mapper<'a> {
             self.warn("connectors whose ends can't be placed are empty");
             return;
         };
-        if v.str("connectorLineStyle").is_some_and(|s| s != "STRAIGHT") {
-            self.warn("elbowed and curved connectors without a saved path import as straight lines");
+        let style = v.str("connectorLineStyle");
+        if style.is_some_and(|s| s != "STRAIGHT") {
+            self.warn("elbowed and curved connectors without a saved path use synthetic routing");
         }
         let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
         o.insert("relativeTransform".into(), rows(space * Affine::translate((x0, y0))));
         o.insert("size".into(), json!({"x": (a.x - b.x).abs(), "y": (a.y - b.y).abs()}));
-        o.insert(
-            "vectorNetwork".into(),
-            json!({"vertices": [{"x": a.x - x0, "y": a.y - y0}, {"x": b.x - x0, "y": b.y - y0}], "segments": [{"a": 0, "b": 1}]}),
-        );
+        o.insert("vectorNetwork".into(), connector_network(style, Point::new(a.x - x0, a.y - y0), Point::new(b.x - x0, b.y - y0)));
     }
 
     /// A connector with text, imported as a frame with its vector line and its text label.
@@ -643,8 +641,9 @@ impl<'a> Mapper<'a> {
             self.warn("connectors whose ends can't be placed are empty");
             return (None, None);
         };
-        if v.str("connectorLineStyle").is_some_and(|s| s != "STRAIGHT") {
-            self.warn("elbowed and curved connectors without a saved path import as straight lines");
+        let style = v.str("connectorLineStyle");
+        if style.is_some_and(|s| s != "STRAIGHT") {
+            self.warn("elbowed and curved connectors without a saved path use synthetic routing");
         }
         let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
         let w = (a.x - b.x).abs();
@@ -672,10 +671,7 @@ impl<'a> Mapper<'a> {
                 line.insert(to.into(), json!(cap_name(c)));
             }
         }
-        line.insert(
-            "vectorNetwork".into(),
-            json!({"vertices": [{"x": a.x - x0, "y": a.y - y0}, {"x": b.x - x0, "y": b.y - y0}], "segments": [{"a": 0, "b": 1}]}),
-        );
+        line.insert("vectorNetwork".into(), connector_network(style, Point::new(a.x - x0, a.y - y0), Point::new(b.x - x0, b.y - y0)));
         self.count += 1;
 
         // Label text child
@@ -2029,4 +2025,59 @@ fn svg_path(b: &[u8]) -> Option<String> {
         }
     }
     Some(out)
+}
+
+/// Network for a connector without a saved path: straight, orthogonal elbowed, or cubic curved bezier.
+pub(super) fn connector_network(style: Option<&str>, p0: Point, p1: Point) -> Value {
+    match style {
+        Some("ELBOWED") if (p0.x - p1.x).abs() >= 1e-4 && (p0.y - p1.y).abs() >= 1e-4 => {
+            let (v1, v2) = if (p1.x - p0.x).abs() >= (p1.y - p0.y).abs() {
+                let mid_x = (p0.x + p1.x) / 2.0;
+                (Point::new(mid_x, p0.y), Point::new(mid_x, p1.y))
+            } else {
+                let mid_y = (p0.y + p1.y) / 2.0;
+                (Point::new(p0.x, mid_y), Point::new(p1.x, mid_y))
+            };
+            json!({
+                "vertices": [
+                    {"x": p0.x, "y": p0.y},
+                    {"x": v1.x, "y": v1.y},
+                    {"x": v2.x, "y": v2.y},
+                    {"x": p1.x, "y": p1.y},
+                ],
+                "segments": [
+                    {"a": 0, "b": 1},
+                    {"a": 1, "b": 2},
+                    {"a": 2, "b": 3},
+                ]
+            })
+        }
+        Some("CURVED") => {
+            let (ta, tb) = if (p1.x - p0.x).abs() >= (p1.y - p0.y).abs() {
+                let hx = (p1.x - p0.x) * 0.5;
+                ([hx, 0.0], [-hx, 0.0])
+            } else {
+                let hy = (p1.y - p0.y) * 0.5;
+                ([0.0, hy], [0.0, -hy])
+            };
+            json!({
+                "vertices": [
+                    {"x": p0.x, "y": p0.y},
+                    {"x": p1.x, "y": p1.y},
+                ],
+                "segments": [
+                    {"a": 0, "b": 1, "ta": ta, "tb": tb},
+                ]
+            })
+        }
+        _ => json!({
+            "vertices": [
+                {"x": p0.x, "y": p0.y},
+                {"x": p1.x, "y": p1.y},
+            ],
+            "segments": [
+                {"a": 0, "b": 1},
+            ]
+        }),
+    }
 }

@@ -299,9 +299,10 @@ fn other_layer_kinds_import_as_the_closest_layers() {
     // A connector from a free point to the centre of a sibling, with its end cap.
     let link = named(&doc, "Link");
     let world = doc.world_transform(link.id);
-    let ends: Vec<(f64, f64)> =
-        network_of(&doc, "Link").vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
-    assert_eq!(ends, [(0.0, 300.0), (450.0, 50.0)]);
+    let link_net = network_of(&doc, "Link");
+    let ends: Vec<(f64, f64)> = link_net.vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
+    assert_eq!(ends, [(0.0, 300.0), (225.0, 300.0), (225.0, 50.0), (450.0, 50.0)]);
+    assert_eq!(link_net.segments.len(), 3);
     assert_eq!(link.stroke.cap_end, StrokeCap::TriangleArrow);
     // A connector with text: a frame with its vector line and its text label.
     let labeled = named(&doc, "LabeledLink");
@@ -315,6 +316,40 @@ fn other_layer_kinds_import_as_the_closest_layers() {
     for w in ["sticky layers import as frames", "shape with text layers", "connector layers import as vectors", "table layers", "elbowed"] {
         assert!(warnings.iter().any(|x| x.contains(w)), "{w}: {warnings:?}");
     }
+}
+
+#[test]
+fn connector_routing_synthetic() {
+    use super::map::connector_network;
+    use figcraft_doc::geom::Point;
+
+    // Elbowed horizontal dominant
+    let el_h = connector_network(Some("ELBOWED"), Point::new(0.0, 0.0), Point::new(100.0, 50.0));
+    assert_eq!(el_h["vertices"].as_array().unwrap().len(), 4);
+    assert_eq!(el_h["segments"].as_array().unwrap().len(), 3);
+    assert_eq!(el_h["vertices"][1]["x"], 50.0);
+    assert_eq!(el_h["vertices"][1]["y"], 0.0);
+    assert_eq!(el_h["vertices"][2]["x"], 50.0);
+    assert_eq!(el_h["vertices"][2]["y"], 50.0);
+
+    // Elbowed vertical dominant
+    let el_v = connector_network(Some("ELBOWED"), Point::new(0.0, 0.0), Point::new(20.0, 100.0));
+    assert_eq!(el_v["vertices"][1]["x"], 0.0);
+    assert_eq!(el_v["vertices"][1]["y"], 50.0);
+    assert_eq!(el_v["vertices"][2]["x"], 20.0);
+    assert_eq!(el_v["vertices"][2]["y"], 50.0);
+
+    // Curved
+    let curved = connector_network(Some("CURVED"), Point::new(0.0, 0.0), Point::new(100.0, 40.0));
+    assert_eq!(curved["vertices"].as_array().unwrap().len(), 2);
+    let seg = &curved["segments"][0];
+    assert_eq!(seg["ta"], serde_json::json!([50.0, 0.0]));
+    assert_eq!(seg["tb"], serde_json::json!([-50.0, 0.0]));
+
+    // Straight
+    let straight = connector_network(Some("STRAIGHT"), Point::new(0.0, 0.0), Point::new(10.0, 10.0));
+    assert_eq!(straight["vertices"].as_array().unwrap().len(), 2);
+    assert_eq!(straight["segments"].as_array().unwrap().len(), 1);
 }
 
 #[test]
