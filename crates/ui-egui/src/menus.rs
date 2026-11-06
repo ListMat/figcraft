@@ -30,18 +30,70 @@ pub const UI_COMMANDS: &[&str] = &[
 ];
 
 /// Run a menu item: some open dialogs or use platform services, the rest go to the engine.
-/// Paste: the system clipboard wins when it holds something newer than our own copy (an image, SVG
-/// or text from another app); otherwise our copied layers. `event_text` is the text the platform
-/// handed over with the paste event (the browser has no other way to read it).
+/// Paste: the system clipboard wins when it holds something newer than our own copy (Pen or Figma
+/// HTML layers, an image, SVG, `.pen` JSON or text from another app); otherwise our copied layers.
+/// `event_text` is the text the platform handed over with the paste event (the browser has no other
+/// way to read it).
 pub fn paste(app: &mut FigApp, event_text: Option<&str>) {
+    paste_at(app, event_text, None);
+}
+
+/// [`paste`] targeting an optional `(x, y)` page coordinate (used by the canvas context menu's
+/// "Paste here").
+pub fn paste_at(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>) {
     let sys_text = app.services.clipboard_get_text().or_else(|| event_text.map(str::to_string)).filter(|t| !t.is_empty());
     let ours = sys_text.is_some() && sys_text == app.ui.last_copy;
-    let (cx, cy) = app.session.ds().map(|d| (d.view.cx, d.view.cy)).unwrap_or((0.0, 0.0));
+    let (cx, cy) = at.unwrap_or_else(|| app.session.ds().map(|d| (d.view.cx, d.view.cy)).unwrap_or((0.0, 0.0)));
     if !ours {
+        let sys_html = app.services.clipboard_get_html();
+        // Pen (`pen.dev`) puts `Node ID: <id>` in `text/plain` and the full `.pen` JSON node tree
+        // inside `<span data-pen-node-clipboard="<base64>">` in `text/html`.
+        if let Some(pen_bytes) = sys_html
+            .as_deref()
+            .and_then(figcraft_format::pen::extract_clipboard_html)
+            .or_else(|| sys_text.as_deref().and_then(figcraft_format::pen::extract_clipboard_html))
+        {
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(pen_bytes);
+            app.run(
+                "file.import",
+                json!({
+                    "data": b64,
+                    "name": "Pasted layers.pen",
+                    "x": cx,
+                    "y": cy,
+                    "center": true,
+                    "intoPage": true,
+                    "localImages": true
+                }),
+            );
+            return;
+        }
+        // Figma HTML clipboard (`<!--(figma)...(/figma)-->`).
+        if let Some(fig_bytes) = sys_html
+            .as_deref()
+            .and_then(figcraft_format::fig::extract_clipboard_html)
+            .or_else(|| sys_text.as_deref().and_then(figcraft_format::fig::extract_clipboard_html))
+        {
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(fig_bytes);
+            app.run(
+                "file.import",
+                json!({
+                    "data": b64,
+                    "name": "Pasted layers.fig",
+                    "x": cx,
+                    "y": cy,
+                    "center": true,
+                    "intoPage": true
+                }),
+            );
+            return;
+        }
         if let Some((png, w, h)) = clipboard_png(app) {
             use base64::Engine as _;
             let b64 = base64::engine::general_purpose::STANDARD.encode(png);
-            // Centred in the view.
+            // Centred on the target point.
             let (x, y) = ((cx - f64::from(w) / 2.0).round(), (cy - f64::from(h) / 2.0).round());
             app.run("file.import", json!({"data": b64, "name": "Pasted image.png", "x": x, "y": y}));
             return;
@@ -55,13 +107,34 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>) {
                 use base64::Engine as _;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
                 app.run("file.import", json!({"data": b64, "name": "Pasted SVG.svg", "x": cx, "y": cy, "center": true}));
+            } else if figcraft_format::pen::looks_like_pen_json(&text) {
+                use base64::Engine as _;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+                app.run(
+                    "file.import",
+                    json!({
+                        "data": b64,
+                        "name": "Pasted layers.pen",
+                        "x": cx,
+                        "y": cy,
+                        "center": true,
+                        "intoPage": true
+                    }),
+                );
             } else {
                 app.run("text.create", json!({"text": text, "x": cx, "y": cy}));
             }
             return;
         }
     }
-    app.run("edit.paste", json!({}));
+    match at {
+        Some((px, py)) if !app.session.clipboard.nodes.is_empty() => {
+            app.run("edit.paste", json!({"x": px, "y": py}));
+        }
+        _ => {
+            app.run("edit.paste", json!({}));
+        }
+    }
 }
 
 /// The system clipboard's image as PNG bytes, with its size.
@@ -532,11 +605,7 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                     if item(ui, label, sc, available(id), false, &t) {
                         if *id == "edit.paste" {
                             let p = app.to_page(pos);
-                            if app.session.clipboard.nodes.is_empty() {
-                                invoke(app, id);
-                            } else {
-                                app.run("edit.paste", json!({"x": p.x, "y": p.y}));
-                            }
+                            paste_at(app, None, Some((p.x, p.y)));
                         } else {
                             invoke(app, id);
                         }

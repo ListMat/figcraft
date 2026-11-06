@@ -241,6 +241,9 @@ impl Services for Desktop {
     fn clipboard_get_text(&mut self) -> Option<String> {
         self.clipboard.as_mut()?.get_text().ok()
     }
+    fn clipboard_get_html(&mut self) -> Option<String> {
+        self.clipboard.as_mut()?.get().html().ok().filter(|s| !s.is_empty())
+    }
     fn clipboard_set_png(&mut self, w: u32, h: u32, rgba: &[u8]) {
         if let Some(c) = self.clipboard.as_mut() {
             let _ = c.set_image(arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(rgba) });

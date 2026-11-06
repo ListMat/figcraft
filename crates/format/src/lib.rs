@@ -14,11 +14,13 @@
 //! JSON (the `document.json` alone) also opens. Reading is lenient: structural problems are
 //! repaired (see [`Document::repair`]) and reported, damaged versions and libraries are skipped.
 //!
-//! [`rest`] imports the public REST API file JSON; [`fig`] imports `.fig` files (best effort).
+//! [`rest`] imports the public REST API file JSON; [`fig`] imports `.fig` files (best effort);
+//! [`pen`] imports `.pen` JSON and clipboard payloads.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod fig;
 pub mod library;
+pub mod pen;
 pub mod rest;
 pub mod thumbnail;
 pub mod video_export;

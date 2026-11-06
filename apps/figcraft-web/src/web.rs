@@ -35,12 +35,13 @@ pub fn start() {
                         log::info!("figcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
                     let reduce_motion = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
+                    let paste_html = install_paste_html_listener();
                     let mut session = Session::new();
                     // Live sessions: the browser joins sessions a desktop app hosts; whatever arrives
                     // on the socket wakes the page for a frame.
                     let ctx = cc.egui_ctx.clone();
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
-                    let fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
+                    let fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone(), paste_html }));
                     Ok(Box::new(WebShell { fig }))
                 }),
             )
@@ -69,6 +70,24 @@ impl eframe::App for WebShell {
     }
 }
 
+/// Capture `text/html` from browser `paste` events before eframe handles them so rich HTML
+/// clipboards (Pen's `data-pen-node-clipboard`, Figma's `<!--(figma)-->`) are available to
+/// `WebServices::clipboard_get_html`.
+fn install_paste_html_listener() -> std::sync::Arc<std::sync::Mutex<Option<String>>> {
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let Some(window) = web_sys::window() else { return slot };
+    let slot_cb = slot.clone();
+    let cb = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(move |ev: web_sys::ClipboardEvent| {
+        let html = ev.clipboard_data().and_then(|d| d.get_data("text/html").ok()).filter(|s| !s.is_empty());
+        if let Ok(mut guard) = slot_cb.lock() {
+            *guard = html;
+        }
+    });
+    let _ = window.add_event_listener_with_callback_and_bool("paste", cb.as_ref().unchecked_ref(), true);
+    cb.forget();
+    slot
+}
+
 /// Browser services. Open dialogs return nothing for now (the trait's defaults); files are saved
 /// as downloads. Copies go to the system clipboard through egui's output; pastes arrive as paste
 /// events with their text (a page can't read the clipboard when it likes).
@@ -76,6 +95,7 @@ struct WebServices {
     /// `prefers-reduced-motion: reduce` (it follows the setting while the page is open).
     reduce_motion: Option<web_sys::MediaQueryList>,
     ctx: egui::Context,
+    paste_html: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl Services for WebServices {
@@ -94,6 +114,9 @@ impl Services for WebServices {
     }
     fn clipboard_set_text(&mut self, s: &str) {
         figcraft_ui_egui::egui_copy_text(&self.ctx, s);
+    }
+    fn clipboard_get_html(&mut self) -> Option<String> {
+        self.paste_html.lock().ok().and_then(|mut g| g.take())
     }
     fn clipboard_set_png(&mut self, w: u32, h: u32, rgba: &[u8]) {
         figcraft_ui_egui::egui_copy_png(&self.ctx, w, h, rgba);

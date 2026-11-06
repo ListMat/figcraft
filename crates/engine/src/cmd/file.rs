@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.open",
             "Open",
-            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .svg, .png, .jpg …); REST and .fig imports return `warnings`",
+            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .pen (JSON), .svg, .png, .jpg …); REST, .fig and .pen imports return `warnings`",
             false,
             open
         ),
@@ -74,7 +74,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.import",
             "Import",
-            "{path | data (base64) + name, x?, y?, center? (SVG: centre it on x, y), variables? (REST: the local variables JSON as an object, JSON text or a path)}  SVG becomes an editable frame (shapes, text, gradients, masks, effects; with `warnings` for what it left out), images become image layers, .figcraft, REST API file JSON and .fig pages are appended with their variables and flows (REST and .fig: with `warnings`)",
+            "{path | data (base64) + name, x?, y?, center? (SVG/.pen: centre it on x, y), intoPage? (place imported layers onto the current page instead of appending pages; default true for .pen), localImages? (resolve local file:// image URLs on clipboard paste), variables? (REST: the local variables JSON as an object, JSON text or a path)}  SVG and .pen become editable layers on the page (with `warnings` for what was approximated or left out), images become image layers, .figcraft, REST API file JSON and .fig pages are appended with their variables and flows (REST and .fig: with `warnings`)",
             true,
             import
         ),
@@ -476,12 +476,15 @@ pub fn load_bytes(bytes: &[u8], name_hint: &str) -> Result<(Document, Vec<String
 pub fn load_path(path: &str, variables: Option<&Value>) -> Result<(figcraft_format::Loaded, bool)> {
     let bytes = read(path)?;
     let sibling = if variables.is_none() { sibling_variables(path) } else { None };
-    load_with(&bytes, path, variables.or(sibling.as_ref()), &rest_images(path))
+    let rest_img = rest_images(path);
+    let pen_img = pen_images(Some(path), true);
+    let images = |r: &str| rest_img(r).or_else(|| pen_img(r));
+    load_with(&bytes, path, variables.or(sibling.as_ref()), &images)
 }
 
 /// Load from bytes. Returns the document with its notes (repairs of a native file, or import
-/// warnings) and version history, and whether it was imported from REST API file JSON or a `.fig`
-/// file (such a file is never saved over). `variables`: the local variables JSON for a REST API file JSON.
+/// warnings) and version history, and whether it was imported from REST API file JSON, `.fig` or
+/// `.pen` (such a file is never saved over). `variables`: the local variables JSON for a REST API file JSON.
 fn load_with(
     bytes: &[u8],
     name_hint: &str,
@@ -520,6 +523,18 @@ fn load_with(
                 link_instances(&mut doc);
                 return Ok((figcraft_format::Loaded { issues: warnings, ..doc.into() }, true));
             }
+            if let Some(r) = figcraft_format::pen::try_import(bytes, &file_stem(name_hint), images) {
+                let (mut doc, warnings) = r.map_err(|e| EngineError::Other(e.to_string()))?;
+                link_instances(&mut doc);
+                settle_imported_layout(&mut doc);
+                return Ok((figcraft_format::Loaded { issues: warnings, ..doc.into() }, true));
+            }
+            if ext(name_hint) == "pen" {
+                return Err(EngineError::Other(
+                    "this .pen file is encrypted on disk: copy the layers in Pen (Ctrl+C / Cmd+C) and paste them into FigCraft (Ctrl+V / Cmd+V)"
+                        .into(),
+                ));
+            }
             if let Some(r) = figcraft_format::rest::try_import_with(bytes, variables, images) {
                 let (mut doc, warnings) = r.map_err(|e| EngineError::Other(e.to_string()))?;
                 link_instances(&mut doc);
@@ -532,6 +547,86 @@ fn load_with(
             Ok((loaded, false))
         }
     }
+}
+
+/// Settle text measurements, group bounds and flexbox/auto-layout sizes on a freshly imported
+/// `.pen` document so both `file.open` (non-undoable) and `file.import` (before centring) have
+/// accurate layer bounds.
+fn settle_imported_layout(doc: &mut Document) {
+    use figcraft_layout::Measure as _;
+    let m = crate::measure::TextMeasure;
+    let all: Vec<NodeId> = doc.ids().filter(|id| doc.node(*id).is_some_and(|n| !n.is_page())).collect();
+    for &id in &all {
+        if let Some(n) = doc.node(id)
+            && let Some((w, h)) = figcraft_text::auto_size(n)
+            && ((w - n.width).abs() > 1e-6 || (h - n.height).abs() > 1e-6)
+        {
+            figcraft_layout::set_size(doc, id, w, h);
+        }
+    }
+    let mut groups: Vec<NodeId> = all.iter().copied().filter(|id| doc.node(*id).is_some_and(|n| n.kind.bounds_follow_children())).collect();
+    groups.sort_by_key(|id| std::cmp::Reverse(doc.ancestors(*id).len()));
+    for g in groups {
+        if doc.node(g).is_some_and(|n| !n.children.is_empty()) {
+            let _ = doc.fit_to_children(g);
+        }
+    }
+    let mut frames: Vec<NodeId> =
+        all.iter().copied().filter(|id| doc.node(*id).is_some_and(|n| n.layout.is_some() && n.kind.is_frame_like())).collect();
+    frames.sort_by_key(|id| std::cmp::Reverse(doc.ancestors(*id).len()));
+    for f in frames {
+        // In CSS/Pen flexbox, a `fill_container` child on a parent's `fit_content` cross-axis
+        // stretches to match the widest non-fill sibling; expand before `coherent_sizing` fixes it.
+        if let Some(fnod) = doc.node(f) {
+            let (hug_w, hug_h) = (fnod.child_layout.sizing_h == Sizing::Hug, fnod.child_layout.sizing_v == Sizing::Hug);
+            let flow = figcraft_layout::flow_children(doc, f);
+            if hug_w {
+                let max_w = flow
+                    .iter()
+                    .filter_map(|c| doc.node(*c))
+                    .filter(|n| n.child_layout.sizing_h != Sizing::Fill)
+                    .map(|n| n.width)
+                    .fold(0.0_f64, f64::max);
+                if max_w > 0.0 {
+                    for &c in &flow {
+                        if let Some(cn) = doc.node(c)
+                            && cn.child_layout.sizing_h == Sizing::Fill
+                        {
+                            let nw = figcraft_layout::clamp_size(max_w, cn.child_layout.min_w, cn.child_layout.max_w);
+                            let nh = m.text_height(doc, c, nw).unwrap_or(cn.height);
+                            figcraft_layout::set_size(doc, c, nw, nh);
+                        }
+                    }
+                }
+            }
+            if hug_h {
+                let max_h = flow
+                    .iter()
+                    .filter_map(|c| doc.node(*c))
+                    .filter(|n| n.child_layout.sizing_v != Sizing::Fill)
+                    .map(|n| n.height)
+                    .fold(0.0_f64, f64::max);
+                if max_h > 0.0 {
+                    for &c in &flow {
+                        if let Some(cn) = doc.node(c)
+                            && cn.child_layout.sizing_v == Sizing::Fill
+                        {
+                            let nh = figcraft_layout::clamp_size(max_h, cn.child_layout.min_h, cn.child_layout.max_h);
+                            figcraft_layout::set_size(doc, c, cn.width, nh);
+                        }
+                    }
+                }
+            }
+        }
+        figcraft_layout::layout_frame(doc, f, &m);
+    }
+    for &id in &all {
+        figcraft_layout::coherent_sizing(doc, id);
+    }
+    for pg in doc.pages.clone() {
+        figcraft_layout::layout_page(doc, pg, &m);
+    }
+    let _ = doc.take_dirty();
 }
 
 /// Link imported instances to their mains (layer sources, overrides found by comparing values),
@@ -571,6 +666,92 @@ fn rest_images(path: &str) -> impl Fn(&str) -> Option<Vec<u8>> {
 
 #[cfg(target_arch = "wasm32")]
 fn rest_images(_path: &str) -> impl Fn(&str) -> Option<Vec<u8>> {
+    figcraft_format::rest::no_images
+}
+
+/// Image bytes for a `.pen` import's local `file:///…` URL (when `allow_file_urls` is set) or a
+/// relative image path next to `base_path`. Rejects network/UNC paths, `..` traversal, non-image
+/// extensions and files larger than [`MAX_IMAGE_FILE`].
+#[cfg(not(target_arch = "wasm32"))]
+fn pen_images(base_path: Option<&str>, allow_file_urls: bool) -> impl Fn(&str) -> Option<Vec<u8>> {
+    let base_dir = base_path.and_then(|p| std::path::Path::new(p).parent().map(std::path::Path::to_path_buf));
+    move |url: &str| {
+        let trimmed = url.trim();
+        if trimmed.is_empty() || trimmed.len() > 4096 {
+            return None;
+        }
+        let candidate = if let Some(rest) = trimmed.strip_prefix("file://") {
+            if !allow_file_urls {
+                return None;
+            }
+            // Only local `file:///...` or `file://localhost/...`: never remote SMB/UNC hosts.
+            let raw_path = if let Some(p) = rest.strip_prefix("localhost/") {
+                format!("/{p}")
+            } else if rest.starts_with('/') {
+                rest.to_string()
+            } else {
+                return None;
+            };
+            let decoded = percent_decode_utf8(&raw_path)?;
+            // Strip leading `/` before a Windows drive letter (`/C:/...` -> `C:/...`).
+            let bytes = decoded.as_bytes();
+            let norm = if bytes.len() >= 3 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':' {
+                &decoded[1..]
+            } else {
+                decoded.as_str()
+            };
+            if norm.starts_with("\\\\") || norm.starts_with("//") {
+                return None;
+            }
+            let p = std::path::PathBuf::from(norm);
+            if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+                return None;
+            }
+            p
+        } else if !trimmed.contains("://") && !trimmed.starts_with('/') && !trimmed.starts_with('\\') {
+            let dir = base_dir.as_ref()?;
+            let decoded = percent_decode_utf8(trimmed)?;
+            let rel = std::path::Path::new(&decoded);
+            if rel
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_)))
+            {
+                return None;
+            }
+            dir.join(rel)
+        } else {
+            return None;
+        };
+        let ext_lc = candidate.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if !matches!(ext_lc.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff") {
+            return None;
+        }
+        let meta = std::fs::metadata(&candidate).ok()?;
+        if meta.is_file() && meta.len() <= MAX_IMAGE_FILE { std::fs::read(&candidate).ok() } else { None }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn percent_decode_utf8(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let hex = std::str::from_utf8(&b[i + 1..i + 3]).ok()?;
+            let byte = u8::from_str_radix(hex, 16).ok()?;
+            out.push(byte);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn pen_images(_base_path: Option<&str>, _allow_file_urls: bool) -> impl Fn(&str) -> Option<Vec<u8>> {
     figcraft_format::rest::no_images
 }
 
@@ -1325,20 +1506,32 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(out)
         }
-        "figcraft" | "json" | "fig" => {
-            let resolver = path.as_deref().map(rest_images);
-            let images: figcraft_format::rest::ImageResolver = match &resolver {
-                Some(r) => r,
-                None => &figcraft_format::rest::no_images,
-            };
+        "figcraft" | "json" | "fig" | "pen" => {
+            let allow_file_urls = path.is_some() || boolean(p, "localImages").unwrap_or(false);
+            let rest_img = path.as_deref().map(rest_images);
+            let pen_img = pen_images(path.as_deref(), allow_file_urls);
+            let combined = |r: &str| rest_img.as_ref().and_then(|f| f(r)).or_else(|| pen_img(r));
             let sibling = if variables.is_none() { path.as_deref().and_then(sibling_variables) } else { None };
-            let (other, rest) = load_with(&bytes, &name, variables.as_ref().or(sibling.as_ref()), images)?;
-            let pages = append_pages(s.doc_mut()?, &other.doc)?;
-            let mut out = json!({"pages": pages});
-            if rest {
-                out["warnings"] = json!(other.issues);
+            let (other, rest) = load_with(&bytes, &name, variables.as_ref().or(sibling.as_ref()), &combined)?;
+            let into_page = boolean(p, "intoPage").unwrap_or_else(|| ext(&name) == "pen");
+            if into_page {
+                let ids = paste_doc_into_page(s, &other.doc, x, y, boolean(p, "center").unwrap_or(false))?;
+                let mut out = json!({"ids": ids});
+                if let Some(&first) = ids.first() {
+                    out["id"] = json!(first);
+                }
+                if rest && !other.issues.is_empty() {
+                    out["warnings"] = json!(other.issues);
+                }
+                Ok(out)
+            } else {
+                let pages = append_pages(s.doc_mut()?, &other.doc)?;
+                let mut out = json!({"pages": pages});
+                if rest {
+                    out["warnings"] = json!(other.issues);
+                }
+                Ok(out)
             }
-            Ok(out)
         }
         "mp4" | "m4v" => {
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -1399,9 +1592,248 @@ fn append_pages(doc: &mut Document, other: &Document) -> Result<Vec<NodeId>> {
         if let (Some(src), Some(n)) = (src, doc.node_mut(*new)) {
             n.source = Some(src);
         }
+        remap_component_props(doc, *new, &map);
     }
     crate::library::merge_store(doc, other, &map)?;
     Ok(new_pages)
+}
+
+fn remap_component_props(doc: &mut Document, id: NodeId, map: &std::collections::BTreeMap<NodeId, NodeId>) {
+    let Some(NodeKind::Component { props, .. }) = doc.node_mut(id).map(|n| &mut n.kind) else {
+        return;
+    };
+    for def in props.values_mut() {
+        match def {
+            PropDef::InstanceSwap { default, preferred } => {
+                if let Some(&m) = map.get(default) {
+                    *default = m;
+                }
+                for p in preferred.iter_mut() {
+                    if let Some(&m) = map.get(p) {
+                        *p = m;
+                    }
+                }
+            }
+            PropDef::Slot { preferred } => {
+                for p in preferred.iter_mut() {
+                    if let Some(&m) = map.get(p) {
+                        *p = m;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Merge `other`'s top-level page layers (with their images, styles and variables) onto `s`'s
+/// current page (or selected container frame when the pasted content fits inside it), optionally
+/// centring the combined bounds at `(x, y)` (defaulting to the viewport centre).
+fn paste_doc_into_page(s: &mut Session, other: &Document, x: Option<f64>, y: Option<f64>, center_on_point: bool) -> Result<Vec<NodeId>> {
+    use std::collections::BTreeMap;
+    let page = s.page()?;
+    let view_center = s.ds().map(|d| (d.view.cx, d.view.cy)).unwrap_or((0.0, 0.0));
+    let (tx, ty) = (x.unwrap_or(view_center.0), y.unwrap_or(view_center.1));
+    let sel = s.selection();
+
+    let mut source_roots = Vec::new();
+    for &pg in &other.pages {
+        if let Some(pn) = other.node(pg) {
+            source_roots.extend(pn.children.iter().copied());
+        }
+    }
+    if source_roots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let src_bounds = other.bounds_of(&source_roots);
+    let has_component = source_roots.iter().any(|&r| {
+        other
+            .subtree(r)
+            .into_iter()
+            .any(|i| other.node(i).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. })))
+    });
+
+    // When a single Frame or Section is selected and contains the paste point, paste inside it
+    // whenever the pasted layers aren't larger than that container (and don't nest components).
+    let target_parent = {
+        let doc = s.doc()?;
+        sel.first()
+            .copied()
+            .filter(|&cand| {
+                sel.len() == 1
+                    && doc.node(cand).is_some_and(|n| {
+                        (matches!(n.kind, NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Section { .. }))
+                            && !(has_component && crate::components::owning_component(doc, cand).is_some())
+                    })
+                    && doc.world_bounds(cand).is_some_and(|cb| {
+                        cb.contains(figcraft_geom::Point::new(tx, ty))
+                            && src_bounds.is_none_or(|sb| sb.width() <= cb.width() + 1e-6 && sb.height() <= cb.height() + 1e-6)
+                    })
+            })
+            .unwrap_or(page)
+    };
+
+    let doc = s.doc_mut()?;
+    for (k, v) in &other.images {
+        doc.images.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+    for st in &other.styles {
+        if !doc.styles.iter().any(|s| s.id == st.id) {
+            doc.styles.push(st.clone());
+        }
+    }
+    let (col_map, mode_map, var_map) = merge_variables_for_paste(&mut doc.variables, &other.variables);
+
+    let shift = match src_bounds {
+        Some(b) if center_on_point => {
+            let dx = (tx - b.center().x).round();
+            let dy = (ty - b.center().y).round();
+            figcraft_geom::Affine::translate((dx, dy))
+        }
+        Some(b) if x.is_some() || y.is_some() => {
+            let dx = (tx - b.x0).round();
+            let dy = (ty - b.y0).round();
+            figcraft_geom::Affine::translate((dx, dy))
+        }
+        _ => figcraft_geom::Affine::IDENTITY,
+    };
+
+    let mut map = BTreeMap::new();
+    for &r in &source_roots {
+        for id in other.subtree(r) {
+            map.insert(id, doc.alloc_id());
+        }
+    }
+
+    let mut pasted = Vec::with_capacity(source_roots.len());
+    for &r in &source_roots {
+        let mut nodes: Vec<Node> = other.subtree(r).into_iter().filter_map(|i| other.node(i).cloned()).collect();
+        let is_section = nodes.first().is_some_and(|n| matches!(n.kind, NodeKind::Section { .. }));
+        let into = if is_section && !doc.takes_sections(target_parent) { page } else { target_parent };
+        if let Some(root_node) = nodes.first_mut() {
+            let world = other.world_transform(r);
+            root_node.transform = doc.world_transform(into).inverse() * shift * world;
+        }
+        for n in &mut nodes {
+            for val in n.bound.values_mut() {
+                if let Some(mapped) = var_map.get(val.as_str()) {
+                    *val = mapped.clone();
+                }
+            }
+            if !n.var_modes.is_empty() {
+                let old_modes = std::mem::take(&mut n.var_modes);
+                for (cid, mid) in old_modes {
+                    let new_c = col_map.get(&cid).cloned().unwrap_or(cid);
+                    let new_m = mode_map.get(&mid).cloned().unwrap_or(mid);
+                    n.var_modes.insert(new_c, new_m);
+                }
+            }
+            // Bind any unresolved `$var` hints from `.pen` clipboard snippets to matching variables already in `doc`.
+            let hints: Vec<(String, String)> =
+                n.plugin_data.iter().filter_map(|(hk, hv)| hk.strip_prefix("pen:var:").map(|f| (f.to_string(), hv.clone()))).collect();
+            for (field, var_name) in hints {
+                if !n.bound.contains_key(&field)
+                    && let Some(found) = doc.variables.get(&var_name)
+                {
+                    n.bound.insert(field, found.id.clone());
+                }
+            }
+        }
+        pasted.push(doc.paste_nodes(&nodes, &map, r, into, None)?);
+    }
+
+    for new in map.values() {
+        let src = doc.node(*new).and_then(|n| n.source).and_then(|s| map.get(&s).copied());
+        if let (Some(src), Some(n)) = (src, doc.node_mut(*new)) {
+            n.source = Some(src);
+        }
+        remap_component_props(doc, *new, &map);
+    }
+    crate::library::merge_store(doc, other, &map)?;
+    s.set_selection(pasted.clone());
+    Ok(pasted)
+}
+
+/// Merge `src` variables into `dst`, reusing existing collections/modes/variables of the same name
+/// so repeated pastes from Pen reuse tokens instead of duplicating them.
+fn merge_variables_for_paste(
+    dst: &mut Variables,
+    src: &Variables,
+) -> (
+    std::collections::BTreeMap<CollectionId, CollectionId>,
+    std::collections::BTreeMap<ModeId, ModeId>,
+    std::collections::BTreeMap<VariableId, VariableId>,
+) {
+    use std::collections::BTreeMap;
+    let mut col_map = BTreeMap::new();
+    let mut mode_map = BTreeMap::new();
+    let mut var_map = BTreeMap::new();
+
+    for sc in &src.collections {
+        if let Some(dc) = dst.collections.iter_mut().find(|c| c.id == sc.id || c.name == sc.name) {
+            col_map.insert(sc.id.clone(), dc.id.clone());
+            for sm in &sc.modes {
+                if let Some(dm) = dc.modes.iter().find(|m| m.id == sm.id || m.name == sm.name) {
+                    mode_map.insert(sm.id.clone(), dm.id.clone());
+                } else if dc.modes.len() < 32 {
+                    let mut new_mid = sm.id.clone();
+                    let mut n = 2usize;
+                    while dc.modes.iter().any(|m| m.id == new_mid) {
+                        new_mid = format!("{}-{n}", sm.id);
+                        n += 1;
+                    }
+                    dc.modes.push(Mode { id: new_mid.clone(), name: sm.name.clone() });
+                    mode_map.insert(sm.id.clone(), new_mid);
+                }
+            }
+        } else {
+            let mut dc = sc.clone();
+            let mut n = 2usize;
+            while dst.collections.iter().any(|c| c.id == dc.id) {
+                dc.id = format!("{}-{n}", sc.id);
+                n += 1;
+            }
+            col_map.insert(sc.id.clone(), dc.id.clone());
+            for sm in &sc.modes {
+                mode_map.insert(sm.id.clone(), sm.id.clone());
+            }
+            dst.collections.push(dc);
+        }
+    }
+
+    let mut added_ids = Vec::new();
+    for sv in &src.variables {
+        let target_col = col_map.get(&sv.collection).cloned().unwrap_or_else(|| sv.collection.clone());
+        if let Some(dv) = dst.variables.iter().find(|v| v.collection == target_col && v.name == sv.name && v.kind == sv.kind) {
+            var_map.insert(sv.id.clone(), dv.id.clone());
+            continue;
+        }
+        let mut nv = sv.clone();
+        nv.collection = target_col;
+        let mut n = 2usize;
+        while dst.variables.iter().any(|v| v.id == nv.id) {
+            nv.id = format!("{}-{n}", sv.id);
+            n += 1;
+        }
+        nv.values = sv.values.iter().map(|(mid, val)| (mode_map.get(mid).cloned().unwrap_or_else(|| mid.clone()), val.clone())).collect();
+        var_map.insert(sv.id.clone(), nv.id.clone());
+        added_ids.push(nv.id.clone());
+        dst.variables.push(nv);
+    }
+
+    for aid in added_ids {
+        if let Some(v) = dst.variables.iter_mut().find(|v| v.id == aid) {
+            for val in v.values.values_mut() {
+                if let VariableValue::Alias(target) = val
+                    && let Some(mapped) = var_map.get(target.as_str()).cloned()
+                {
+                    *target = mapped;
+                }
+            }
+        }
+    }
+
+    (col_map, mode_map, var_map)
 }
 
 fn close(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1660,5 +2092,95 @@ mod staging_write_tests {
             std::fs::set_permissions(&ro, perms).unwrap();
         }
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod pen_import_tests {
+    use super::*;
+
+    #[test]
+    fn import_pen_into_page_settles_layout_centres_and_undoes_in_one_step() {
+        let pen_doc = json!({
+            "version": "2.22",
+            "variables": {
+                "brand": { "type": "color", "value": "#2563EB" }
+            },
+            "children": [
+                {
+                    "id": "rK3Pf",
+                    "type": "frame",
+                    "name": "Hero Card",
+                    "layout": "vertical",
+                    "width": 320,
+                    "padding": 24,
+                    "gap": 12,
+                    "fill": "$brand",
+                    "cornerRadius": 16,
+                    "children": [
+                        {
+                            "id": "h1",
+                            "type": "text",
+                            "content": "Welcome from Pen",
+                            "fontSize": 24,
+                            "fontWeight": 700,
+                            "fill": "#FFFFFF"
+                        },
+                        {
+                            "id": "sep",
+                            "type": "rectangle",
+                            "width": "fill_container",
+                            "height": 2,
+                            "fill": "#93C5FD"
+                        }
+                    ]
+                }
+            ]
+        });
+        let b64 = base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&pen_doc).unwrap());
+        let mut s = Session::new();
+        let r = s
+            .execute(
+                "file.import",
+                &json!({
+                    "data": b64,
+                    "name": "Pasted layers.pen",
+                    "x": 500.0,
+                    "y": 400.0,
+                    "center": true,
+                    "intoPage": true
+                }),
+            )
+            .unwrap();
+        let ids = r["ids"].as_array().unwrap();
+        assert_eq!(ids.len(), 1);
+        let hero_id = crate::params::id_of(&ids[0]).unwrap();
+        assert_eq!(s.selection(), vec![hero_id]);
+
+        let doc = s.doc().unwrap();
+        assert_eq!(doc.pages.len(), 1, "intoPage keeps a single page instead of appending a new page");
+        let hero = doc.node(hero_id).unwrap();
+        assert_eq!(hero.name, "Hero Card");
+        assert_eq!(hero.width, 320.0);
+        assert!(hero.height > 48.0, "auto-layout height settled around text + padding: {}", hero.height);
+        let bounds = doc.world_bounds(hero_id).unwrap();
+        assert!((bounds.center().x - 500.0).abs() <= 1.0, "centred x: {bounds:?}");
+        assert!((bounds.center().y - 400.0).abs() <= 1.0, "centred y: {bounds:?}");
+
+        let sep = doc.node(hero.children[1]).unwrap();
+        assert!((sep.width - (320.0 - 48.0)).abs() < 1e-6, "fill_container child stretched to inner width: {}", sep.width);
+        assert!(doc.variables.get("brand").is_some(), "variables merged into document");
+
+        // Undo removes the pasted block in a single step.
+        assert!(s.undo().unwrap());
+        assert!(!s.doc().unwrap().contains(hero_id));
+    }
+
+    #[test]
+    fn encrypted_pen_file_returns_clear_guidance() {
+        let mut s = Session::new();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(b"\x00\x01\x02encrypted-binary-blob");
+        let err = s.execute("file.open", &json!({"data": b64, "name": "design.pen"})).unwrap_err().to_string();
+        assert!(err.contains("Ctrl+C") && err.contains("Ctrl+V"), "unexpected error: {err}");
     }
 }

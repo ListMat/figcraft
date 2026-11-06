@@ -1539,6 +1539,7 @@ dependencies = [
 name = "figcraft-format"
 version = "0.6.0"
 dependencies = [
+ "base64 0.22.1",
  "figcraft-doc",
  "figcraft-pathops",
  "flate2",

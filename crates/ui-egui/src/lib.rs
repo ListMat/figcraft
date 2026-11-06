@@ -226,6 +226,11 @@ pub trait Services {
     fn clipboard_get_text(&mut self) -> Option<String> {
         None
     }
+    /// HTML markup on the system clipboard (`text/html` / `HTML Format`), used by apps such as Pen
+    /// and Figma that carry rich design payloads inside HTML attributes or comments.
+    fn clipboard_get_html(&mut self) -> Option<String> {
+        None
+    }
     fn clipboard_set_png(&mut self, _w: u32, _h: u32, _rgba: &[u8]) {}
     /// An image on the system clipboard as (width, height, straight RGBA).
     fn clipboard_get_image(&mut self) -> Option<(u32, u32, Vec<u8>)> {
@@ -977,7 +982,7 @@ impl FigApp {
         let exts: &[&str] = if place {
             &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "mp4", "m4v"]
         } else {
-            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "mp4", "m4v", "figcraft", "fig"]
+            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "mp4", "m4v", "figcraft", "fig", "pen"]
         };
         let title = if place { i18n::tr("Place image / video") } else { i18n::tr("Import") };
         self.pick_open(title, exts, move |app, p| {
@@ -1542,7 +1547,8 @@ impl FigApp {
 }
 
 /// The file types File ▸ Open and a drop on the home screen open.
-pub(crate) const OPEN_EXTENSIONS: &[&str] = &["figcraft", "fig", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "mp4", "m4v"];
+pub(crate) const OPEN_EXTENSIONS: &[&str] =
+    &["figcraft", "fig", "pen", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "mp4", "m4v"];
 
 /// Whether `path` names a file type that opens as a document (the extension, in any case).
 pub(crate) fn opens(path: &Path) -> bool {

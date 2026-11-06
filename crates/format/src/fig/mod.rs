@@ -45,6 +45,28 @@ pub fn is_fig(bytes: &[u8]) -> bool {
     bytes.starts_with(b"fig-") || (bytes.starts_with(b"PK") && zip_has_canvas(bytes))
 }
 
+/// Extract a bare `.fig` (`fig-kiwi`) buffer from an HTML clipboard payload carrying
+/// `<!--(figma)...(/figma)-->`.
+pub fn extract_clipboard_html(html: &str) -> Option<Vec<u8>> {
+    const MAX_CLIPBOARD_HTML: usize = 128 * 1024 * 1024;
+    const START: &str = "<!--(figma)";
+    const END: &str = "(/figma)-->";
+    if html.len() > MAX_CLIPBOARD_HTML {
+        return None;
+    }
+    let s = html.find(START)? + START.len();
+    let rest = html.get(s..)?;
+    let e = rest.find(END)?;
+    let raw: String = rest.get(..e)?.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    if raw.is_empty() {
+        return None;
+    }
+    use base64::Engine as _;
+    let bytes =
+        base64::engine::general_purpose::STANDARD.decode(&raw).or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&raw)).ok()?;
+    is_fig(&bytes).then_some(bytes)
+}
+
 fn zip_has_canvas(bytes: &[u8]) -> bool {
     zip::ZipArchive::new(std::io::Cursor::new(bytes)).is_ok_and(|z| z.file_names().any(|n| n == "canvas.fig"))
 }

@@ -11,14 +11,20 @@ use serde_json::json;
 use crate::{FigApp, Services, egui_copy_png, egui_copy_text};
 
 /// The browser shell's clipboard: writes go out as egui output commands.
-struct Browser(egui::Context);
+struct Browser {
+    ctx: egui::Context,
+    html: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
 
 impl Services for Browser {
     fn clipboard_set_text(&mut self, s: &str) {
-        egui_copy_text(&self.0, s);
+        egui_copy_text(&self.ctx, s);
+    }
+    fn clipboard_get_html(&mut self) -> Option<String> {
+        self.html.lock().ok().and_then(|mut g| g.take())
     }
     fn clipboard_set_png(&mut self, w: u32, h: u32, rgba: &[u8]) {
-        egui_copy_png(&self.0, w, h, rgba);
+        egui_copy_png(&self.ctx, w, h, rgba);
     }
 }
 
@@ -28,6 +34,8 @@ struct Page {
     time: f64,
     /// The system clipboard's text.
     clipboard: String,
+    /// Optional HTML clipboard payload (`text/html`).
+    html: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl Page {
@@ -36,8 +44,9 @@ impl Page {
         let r = s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 100, "height": 50})).unwrap();
         s.execute("select.set", &json!({"ids": [r["id"]]})).unwrap();
         let ctx = egui::Context::default();
-        let app = FigApp::new(s, Box::new(Browser(ctx.clone())));
-        let mut p = Self { ctx, app, time: 0.0, clipboard: "text copied in another app".into() };
+        let html = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let app = FigApp::new(s, Box::new(Browser { ctx: ctx.clone(), html: html.clone() }));
+        let mut p = Self { ctx, app, time: 0.0, clipboard: "text copied in another app".into(), html };
         for _ in 0..3 {
             p.frame(vec![]);
         }
@@ -138,4 +147,60 @@ fn a_mismatched_image_buffer_is_dropped() {
         out.textures_delta.clear();
         assert!(out.platform_output.commands.is_empty(), "{w}x{h}");
     }
+}
+
+#[test]
+fn pen_html_clipboard_pastes_editable_layers_instead_of_node_id_text() {
+    use base64::Engine as _;
+    let mut p = Page::new();
+    let pen_payload = json!({
+        "remoteData": {
+            "version": "2.22",
+            "nodes": [
+                {
+                    "id": "rK3Pf",
+                    "type": "frame",
+                    "name": "Landing Hero",
+                    "layout": "vertical",
+                    "width": 640,
+                    "padding": 32,
+                    "gap": 16,
+                    "fill": "#111827",
+                    "children": [
+                        {
+                            "id": "t1",
+                            "type": "text",
+                            "content": "Ship faster",
+                            "fontSize": 32,
+                            "fill": "#FFFFFF"
+                        },
+                        {
+                            "id": "cta",
+                            "type": "rectangle",
+                            "width": 160,
+                            "height": 48,
+                            "cornerRadius": 12,
+                            "fill": "#3B82F6"
+                        }
+                    ]
+                }
+            ]
+        }
+    });
+    let b64 = base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&pen_payload).unwrap());
+    p.clipboard = "Node ID: rK3Pf".into();
+    *p.html.lock().unwrap() = Some(format!(r#"<span data-pen-node-clipboard="{b64}">Node ID: rK3Pf</span>"#));
+
+    p.paste();
+
+    let doc = p.app.session.doc().unwrap();
+    assert!(
+        !doc.nodes().any(|n| n.kind.text().is_some_and(|t| t.characters.contains("Node ID: rK3Pf"))),
+        "must never create a plain `Node ID: rK3Pf` text layer when Pen HTML clipboard is present"
+    );
+    let hero = doc.nodes().find(|n| n.name == "Landing Hero").expect("Landing Hero frame imported");
+    assert!(matches!(hero.kind, NodeKind::Frame));
+    assert_eq!(hero.children.len(), 2);
+    let title = doc.node(hero.children[0]).unwrap();
+    assert_eq!(title.kind.text().map(|t| t.characters.as_str()), Some("Ship faster"));
 }
